@@ -2514,17 +2514,20 @@ class ServerCommandProcessor(CommonCommandProcessor):
 
 
     def _cmd_yappistart(self) -> bool:
+        """ Start yappi """
         import yappi
         yappi.start()
         return True
 
     def _cmd_yappistop(self) -> bool:
+        """ Stop yappi """
         import yappi
         yappi.stop()
         yappi.get_func_stats().save(f'/tmp/profile_{os.getpid()}.prof', 'callgrind')
         return True
 
     def _cmd_memdump(self) -> bool:
+        """ Create memdump """
         import gc
         gc.collect()
         type_counts: typing.Counter[type] = collections.Counter()
