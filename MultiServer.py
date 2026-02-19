@@ -153,7 +153,10 @@ def fast_broadcast(sockets, message: str) -> None:
     for ws in sockets:
         if ws.state is not State.OPEN:
             continue
-        has_deflate = any(isinstance(ext, PerMessageDeflate) for ext in ws.extensions)
+        has_deflate = getattr(ws, "_has_deflate", None)
+        if has_deflate is None:
+            has_deflate = any(isinstance(ext, PerMessageDeflate) for ext in ws.extensions)
+            ws._has_deflate = has_deflate
         if has_deflate:
             deflate_sockets.append(ws)
         else:
