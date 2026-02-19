@@ -956,11 +956,17 @@ class Context:
         will refresh all teams or all slots respectively. If a set is passed for 'changed', each (team,slot)
         pair that has at least one hint modified will be added to the set.
         """
-        for hint_team, hint_slot in self.hints:
-            if team != hint_team and team is not None:
-                continue  # Check specified team only, all if team is None
-            if slot != hint_slot and slot is not None:
-                continue  # Check specified slot only, all if slot is None
+        if team is not None and slot is not None:
+            if (team, slot) not in self.hints:
+                return
+            keys = [(team, slot)]
+        else:
+            keys = [
+                (ht, hs) for ht, hs in self.hints
+                if (team is None or team == ht) and (slot is None or slot == hs)
+            ]
+
+        for hint_team, hint_slot in keys:
             new_hints: typing.Set[Hint] = set()
             for hint in self.hints[hint_team, hint_slot]:
                 new_hint = hint.re_check(self, hint_team)
@@ -969,7 +975,7 @@ class Context:
                     continue
                 for player in self.slot_set(hint.receiving_player) | {hint.finding_player}:
                     if changed is not None:
-                        changed.add((hint_team,player))
+                        changed.add((hint_team, player))
                     if slot is not None and slot != player:
                         self.replace_hint(hint_team, player, hint, new_hint)
             self.hints[hint_team, hint_slot] = new_hints
