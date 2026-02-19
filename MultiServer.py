@@ -1416,7 +1416,7 @@ def register_location_checks(ctx: Context, team: int, slot: int, locations: typi
         affected_slots: typing.Set[int] = set()
         for target_player, item_id, location, flags in sorted(sortable):
             new_item = NetworkItem(item_id, location, slot, flags)
-            affected_slots |= send_items_to(ctx, team, target_player, new_item)
+            affected_slots.update(send_items_to(ctx, team, target_player, new_item))
 
             log_lines.append('(Team #%d) %s sent %s to %s (%s)' % (
                 team + 1, ctx.player_names[(team, slot)], ctx.item_names[ctx.slot_info[target_player].game][item_id],
