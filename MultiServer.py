@@ -474,7 +474,7 @@ class Context:
         self.auto_saver_thread: typing.Optional[threading.Thread] = None
         self.save_dirty = False
         self.tags = ['AP']
-        self._broadcast_buffer: typing.List[typing.Tuple[typing.List[Client], typing.List[dict]]] = []
+        self._broadcast_buffer: typing.List[typing.Tuple[typing.Union[tuple, typing.List[Client]], typing.List[dict]]] = []
         self._broadcast_flush_task: typing.Optional[asyncio.Task] = None
         self.broadcast_flush_delay: float = 0.05
         self.broadcast_max_batch_size: int = 1000
@@ -610,14 +610,28 @@ class Context:
 
     def broadcast_all(self, msgs: typing.List[dict]):
         msg_is_text = all(msg["cmd"] == "PrintJSON" for msg in msgs)
-        endpoints = [
-            endpoint
-            for endpoint in self.endpoints
-            if endpoint.auth and not (msg_is_text and endpoint.no_text)
-        ]
-        self._queue_broadcast(endpoints, msgs)
+        self._queue_broadcast(("all", msg_is_text), msgs)
 
-    def _queue_broadcast(self, endpoints: typing.List[Client], msgs: typing.List[dict]):
+    def _resolve_broadcast_targets(self, key: tuple) -> typing.List[Client]:
+        kind = key[0]
+        is_text = key[1]
+        if kind == "all":
+            return [ep for ep in self.endpoints if ep.auth and not (is_text and ep.no_text)]
+        elif kind == "team":
+            team = key[2]
+            return [
+                ep for ep in itertools.chain.from_iterable(self.clients[team].values())
+                if not (is_text and ep.no_text)
+            ]
+        else:
+            raise ValueError(f"Unknown broadcast key: {key}")
+
+    def _queue_broadcast(self, key: tuple, msgs: typing.List[dict]):
+        self._broadcast_buffer.append((key, list(msgs)))
+        if self._broadcast_flush_task is None or self._broadcast_flush_task.done():
+            self._broadcast_flush_task = asyncio.create_task(self._flush_broadcasts())
+
+    def _queue_broadcast_raw(self, endpoints: typing.List[Client], msgs: typing.List[dict]):
         self._broadcast_buffer.append((endpoints, list(msgs)))
         if self._broadcast_flush_task is None or self._broadcast_flush_task.done():
             self._broadcast_flush_task = asyncio.create_task(self._flush_broadcasts())
@@ -630,18 +644,25 @@ class Context:
         if not buffer:
             return
 
-        grouped: typing.Dict[frozenset, typing.List[dict]] = {}
-        endpoint_lookup: typing.Dict[frozenset, typing.List[Client]] = {}
+        grouped: typing.Dict[typing.Hashable, typing.List[dict]] = {}
+        endpoint_lookup: typing.Dict[typing.Hashable, typing.Union[tuple, typing.List[Client]]] = {}
 
-        for endpoints, msgs in buffer:
-            key = frozenset(id(ep) for ep in endpoints)
+        for key_or_endpoints, msgs in buffer:
+            if isinstance(key_or_endpoints, tuple):
+                key = key_or_endpoints
+            else:
+                key = frozenset(id(ep) for ep in key_or_endpoints)
             if key not in grouped:
                 grouped[key] = []
-                endpoint_lookup[key] = endpoints
+                endpoint_lookup[key] = key_or_endpoints
             grouped[key].extend(msgs)
 
         for key, messages in grouped.items():
-            endpoints = endpoint_lookup[key]
+            target = endpoint_lookup[key]
+            if isinstance(target, tuple):
+                endpoints = self._resolve_broadcast_targets(target)
+            else:
+                endpoints = target
             sockets = [ep.socket for ep in endpoints if ep.socket and ep.socket.open]
             if sockets:
                 # Send in chunks to avoid exceeding websocket payload limit (16MB)
@@ -659,15 +680,10 @@ class Context:
 
     def broadcast_team(self, team: int, msgs: typing.List[dict]):
         msg_is_text = all(msg["cmd"] == "PrintJSON" for msg in msgs)
-        endpoints = [
-            endpoint
-            for endpoint in itertools.chain.from_iterable(self.clients[team].values())
-            if not (msg_is_text and endpoint.no_text)
-        ]
-        self._queue_broadcast(endpoints, msgs)
+        self._queue_broadcast(("team", msg_is_text, team), msgs)
 
     def broadcast(self, endpoints: typing.Iterable[Client], msgs: typing.List[dict]):
-        self._queue_broadcast(list(endpoints), msgs)
+        self._queue_broadcast_raw(list(endpoints), msgs)
 
     async def disconnect(self, endpoint: Client):
         self.endpoints.discard(endpoint)
