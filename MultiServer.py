@@ -1251,10 +1251,6 @@ async def on_client_joined(ctx: Context, client: Client):
                               "If your client supports it, "
                               "you may have additional local commands you can list with /help.",
                       {"type": "Tutorial"})
-    if not any(isinstance(extension, PerMessageDeflate) for extension in client.socket.extensions):
-        ctx.notify_client(client, "Warning: your client does not support compressed websocket connections! "
-                                  "It may stop working in the future. If you are a player, please report this to the "
-                                  "client's developer.")
     ctx.client_connection_timers[client.team, client.slot] = datetime.datetime.now(datetime.timezone.utc)
 
 
