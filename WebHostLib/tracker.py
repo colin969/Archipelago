@@ -38,13 +38,37 @@ def cache_with_herd_protection(key_func: Callable[..., str], version_func: Calla
                 if key not in _herd_locks:
                     _herd_locks[key] = threading.Lock()
                 lock = _herd_locks[key]
+
+            cached = _herd_cache.get(key)
+            if cached:
+                result, cached_version = cached
+                if version_func is None or cached_version == current_version:
+                    return result
+
+                # Stale entry. Try to recompute without blocking other threads.
+                if lock.acquire(blocking=False):
+                    try:
+                        cached = _herd_cache.get(key)
+                        if cached and (version_func is None or cached[1] == current_version):
+                            return cached[0]
+                        new_result = func(*args, **kwargs)
+                        _herd_cache[key] = (new_result, current_version)
+                        while len(_herd_cache) > _CACHE_MAX_SIZE:
+                            oldest = next(iter(_herd_cache))
+                            del _herd_cache[oldest]
+                            _herd_locks.pop(oldest, None)
+                        return new_result
+                    finally:
+                        lock.release()
+                else:
+                    return result
+
+            # No cached result at all, must block.
             with lock:
                 cached = _herd_cache.get(key)
                 if cached:
                     result, cached_version = cached
                     if version_func is None or cached_version == current_version:
-                        del _herd_cache[key]
-                        _herd_cache[key] = cached  # move to end (LRU)
                         return result
                 result = func(*args, **kwargs)
                 _herd_cache[key] = (result, current_version)
