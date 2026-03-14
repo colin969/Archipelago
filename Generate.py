@@ -20,7 +20,23 @@ ModuleUpdate.update()
 import Utils
 import Options
 from BaseClasses import seeddigits, get_seed, PlandoOptions
-from Utils import parse_yamls, version_tuple, __version__, tuplize_version
+from Utils import parse_yamls, version_tuple, __version__, tuplize_version, get_all_causes
+
+
+class PlayerFileError(ValueError):
+    pass
+
+
+class PlayerFilesError(ExceptionGroup):
+    def derive(self, excs):
+        return PlayerFilesError(self.message, excs)
+
+    def __str__(self):
+        error_lines = []
+        for i, exc in enumerate(self.exceptions, 1):
+            error_lines.append(f"{i}. {get_all_causes(exc)}")
+        errors = "\n\n".join(error_lines)
+        return f"{self.message}\n\n{errors}"
 
 
 def mystery_argparse(argv: list[str] | None = None) -> argparse.Namespace:
@@ -122,7 +138,7 @@ def main(args=None) -> tuple[argparse.Namespace, int]:
 
     player_id: int = 1
     player_files: dict[int, str] = {}
-    player_errors: list[str] = []
+    player_exceptions: list[Exception] = []
     for file in os.scandir(args.player_files_path):
         fname = file.name
         if file.is_file() and not fname.startswith(".") and not fname.lower().endswith(".ini") and \
@@ -139,10 +155,9 @@ def main(args=None) -> tuple[argparse.Namespace, int]:
 
             except Exception as e:
                 logging.exception(f"Exception reading weights in file {fname}")
-                player_errors.append(
-                    f"{len(player_errors) + 1}. "
-                    f"File {fname} is invalid. Please fix your yaml.\n{Utils.get_all_causes(e)}"
-                )
+                err = PlayerFileError(f"File {fname} is invalid. Please fix your yaml.")
+                err.__cause__ = e
+                player_exceptions.append(err)
 
     # sort dict for consistent results across platforms:
     weights_cache = {key: value for key, value in sorted(weights_cache.items(), key=lambda k: k[0].casefold())}
@@ -157,10 +172,9 @@ def main(args=None) -> tuple[argparse.Namespace, int]:
     args.multi = max(player_id - 1, args.multi)
 
     if args.multi == 0:
-        if player_errors:
-            errors = "\n\n".join(player_errors)
-            raise ValueError(f"Encountered {len(player_errors)} error(s) in player files. "
-                             f"See logs for full tracebacks.\n\n{errors}")
+        if player_exceptions:
+            raise PlayerFilesError("Errors in player files. See logs for full tracebacks.",
+                                 player_exceptions)
         raise ValueError(
             "No individual player files found and number of players is 0. "
             "Provide individual player files or specify the number of players via host.yaml or --multi."
@@ -170,10 +184,9 @@ def main(args=None) -> tuple[argparse.Namespace, int]:
                  f"{seed_name} Seed {seed} with plando: {args.plando}")
 
     if not weights_cache:
-        if player_errors:
-            errors = "\n\n".join(player_errors)
-            raise ValueError(f"Encountered {len(player_errors)} error(s) in player files. "
-                             f"See logs for full tracebacks.\n\n{errors}")
+        if player_exceptions:
+            raise PlayerFilesError("Errors in player files. See logs for full tracebacks.",
+                                 player_exceptions)
         raise Exception(f"No weights found. "
                         f"Provide a general weights file ({args.weights_file_path}) or individual player files. "
                         f"A mix is also permitted.")
@@ -213,15 +226,13 @@ def main(args=None) -> tuple[argparse.Namespace, int]:
                 settings_cache[fname] = tuple(roll_settings(yaml, args.plando) for yaml in yamls)
             except Exception as e:
                 logging.exception(f"Exception reading settings in file {fname}")
-                player_errors.append(
-                    f"{len(player_errors) + 1}. "
-                    f"File {fname} is invalid. Please fix your yaml.\n{Utils.get_all_causes(e)}"
-                )
+                err = PlayerFileError(f"File {fname} is invalid. Please fix your yaml.")
+                err.__cause__ = e
+                player_exceptions.append(err)
         # Exit early here to avoid throwing the same errors again later
-        if player_errors:
-            errors = "\n\n".join(player_errors)
-            raise ValueError(f"Encountered {len(player_errors)} error(s) in player files. "
-                             f"See logs for full tracebacks.\n\n{errors}")
+        if player_exceptions:
+            raise PlayerFilesError("Errors in player files. See logs for full tracebacks.",
+                                 player_exceptions)
 
     player_path_cache: dict[int, str] = {}
     for player in range(1, args.multi + 1):
@@ -233,7 +244,7 @@ def main(args=None) -> tuple[argparse.Namespace, int]:
     while player <= args.multi:
         path = player_path_cache[player]
         if not path:
-            player_errors.append(f'No weights specified for player {player}')
+            player_exceptions.append(ValueError(f'No weights specified for player {player}'))
             player += 1
             continue
 
@@ -267,24 +278,23 @@ def main(args=None) -> tuple[argparse.Namespace, int]:
             except Exception as e:
                 logging.exception(f"Exception reading settings in file {path} document #{doc_index + 1} "
                                   f"(name: {args.name.get(player, name)})")
-                player_errors.append(
-                    f"{len(player_errors) + 1}. "
-                    f"File {path} document #{doc_index + 1} (name: {args.name.get(player, name)}) is invalid. "
-                    f"Please fix your yaml.\n{Utils.get_all_causes(e)}")
+                err = PlayerFileError(f"File {path} document #{doc_index + 1} "
+                                     f"(name: {args.name.get(player, name)}) is invalid. "
+                                     f"Please fix your yaml.")
+                err.__cause__ = e
+                player_exceptions.append(err)
 
             # increment for each yaml document in the file
             player += 1
 
     if len(set(name.lower() for name in args.name.values())) != len(args.name):
-        player_errors.append(
-            f"{len(player_errors) + 1}. "
-            f"Names have to be unique. Names: {Counter(name.lower() for name in args.name.values())}"
+        player_exceptions.append(
+            ValueError(f"Names have to be unique. Names: {Counter(name.lower() for name in args.name.values())}")
         )
 
-    if player_errors:
-        errors = "\n\n".join(player_errors)
-        raise ValueError(f"Encountered {len(player_errors)} error(s) in player files. "
-                         f"See logs for full tracebacks.\n\n{errors}")
+    if player_exceptions:
+        raise PlayerFilesError("Errors in player files. See logs for full tracebacks.",
+                             player_exceptions)
 
     return args, seed
 
