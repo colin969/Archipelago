@@ -686,6 +686,11 @@ class MultiWorld():
         locations = [location for location in self.get_locations() if location_relevant(location)]
 
         while locations:
+            if self.has_beaten_game(state):
+                beatable_fulfilled = True
+            if all_done():
+                return True
+
             sphere: List[Location] = []
             for n in range(len(locations) - 1, -1, -1):
                 if locations[n].can_reach(state):
@@ -707,13 +712,9 @@ class MultiWorld():
                 if location.item:
                     state.collect(location.item, True, location)
 
-            if self.has_beaten_game(state):
-                beatable_fulfilled = True
-
-            if all_done():
-                return True
-
-        return False
+        if self.has_beaten_game(state):
+            beatable_fulfilled = True
+        return all_done()
 
 
 PathValue = Tuple[str, Optional["PathValue"]]
