@@ -51,7 +51,8 @@ def main(args, seed=None, baked_server_options: dict[str, object] | None = None)
     multiworld.state = CollectionState(multiworld)
     logger.info('Archipelago Version %s  -  Seed: %s\n', __version__, multiworld.seed)
 
-    logger.info(f"Found {len(AutoWorld.AutoWorldRegister.world_types)} World Types:")
+    world_count = len([world for world in AutoWorld.AutoWorldRegister.world_types.values() if not world.hidden])
+    logger.info(f"Found {world_count} World Type{'s' if world_count != 1 else ''}:")
     longest_name = max(len(text) for text in AutoWorld.AutoWorldRegister.world_types)
 
     world_classes = AutoWorld.AutoWorldRegister.world_types.values()
