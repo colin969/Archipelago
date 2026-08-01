@@ -16,6 +16,7 @@ Current endpoints:
     - [`/status/<suuid:seed>`](#status)
 - Room API
     - [`/room_status/<suuid:room_id>`](#roomstatus)
+    - [`/room_players/<suuid:room_id>`](#roomplayers)
 - Tracker API
     - [`/tracker/<suuid:tracker>`](#tracker)
     - [`/static_tracker/<suuid:tracker>`](#statictracker)
@@ -264,6 +265,21 @@ Example:
     "timeout": 7200,
     "tracker": "2gVkMQgISGScA8wsvDZg5A"
 }
+```
+
+### `/room_players/<suuid:room_id>`  
+<a name="roomplayers"></a>
+**Cache timer: None**
+
+Will provide a dict of slot auth names to team + slot id pairs:
+
+Example:
+```json
+[
+  "Player1": [0, 1],
+  "Player2": [0, 2],
+  "Player2_ExtraName": [0, 2]
+]
 ```
 
 ## Tracker Endpoints

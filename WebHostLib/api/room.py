@@ -1,5 +1,6 @@
 from typing import Any, Dict
 from uuid import UUID
+import zlib
 
 from flask import abort, url_for
 
@@ -7,7 +8,7 @@ from WebHostLib import to_url
 import worlds.Files
 from . import api_endpoints, get_players
 from ..models import Room
-
+from Utils import restricted_loads
 
 @api_endpoints.route('/room_status/<suuid:room_id>')
 def room_info(room_id: UUID) -> Dict[str, Any]:
@@ -41,3 +42,16 @@ def room_info(room_id: UUID) -> Dict[str, Any]:
         "timeout": room.timeout,
         "downloads": downloads,
     }
+
+@api_endpoints.route('/room_players/<suuid:room_id>')
+def room_players(room_id: UUID) -> Dict[str, Any]:
+    room = Room.get(id=room_id)
+    if room is None:
+        return abort(404)
+
+    multidata = decompress(room.seed.multidata)
+
+    return multidata["connect_names"]
+
+def decompress(data: bytes) -> dict:
+    return restricted_loads(zlib.decompress(data[1:]))
