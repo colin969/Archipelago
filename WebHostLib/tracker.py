@@ -298,6 +298,16 @@ class TrackerData:
         """ each sphere is { player: { location_id, ... } } """
         return self._multidata.get("spheres", [])
 
+    @_cache_results
+    def get_json_spheres(self) -> List[List[int]]:
+        return [
+            {player: list(locations) for player, locations in sphere.items()} for sphere in self._multidata.get("spheres", [])
+        ]
+
+    def get_all_checked_locations_json(self) -> Dict[int, List[int]]:
+        return {
+            player: list(self.get_player_checked_locations(0, player)) for player in self.get_all_players()[0]
+        }
 
 def _process_if_request_valid(incoming_request: Request, room: Optional[Room]) -> Optional[Response]:
     if not room:

@@ -16,7 +16,8 @@ Current endpoints:
     - [`/status/<suuid:seed>`](#status)
 - Room API
     - [`/room_status/<suuid:room_id>`](#roomstatus)
-    - [`/room_players/<suuid:room_id>`](#roomplayers)
+    - [`/room/<suuid:room_id>/players`](#roomplayers)
+    - [`/room/<suuid:room_id>/spheres]
 - Tracker API
     - [`/tracker/<suuid:tracker>`](#tracker)
     - [`/static_tracker/<suuid:tracker>`](#statictracker)
@@ -267,7 +268,7 @@ Example:
 }
 ```
 
-### `/room_players/<suuid:room_id>`  
+### `/room/<suuid:room_id>/players`  
 <a name="roomplayers"></a>
 **Cache timer: None**
 
