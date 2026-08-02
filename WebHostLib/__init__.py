@@ -67,6 +67,13 @@ app.config["CACHE_TYPE"] = "SimpleCache"
 app.config["HOST_ADDRESS"] = ""
 app.config["ASSET_RIGHTS"] = False
 
+app.config["ADMIN_API_KEY"] = None
+
+# Allow us to keep it outside of the config file, really should add env overrides in full later
+env_api_key = os.environ.get("ADMIN_API_KEY")
+if env_api_key:
+    app.config["ADMIN_API_KEY"] = env_api_key
+
 cache = Cache()
 Compress(app)
 CLI(app)

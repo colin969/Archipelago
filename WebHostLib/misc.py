@@ -220,7 +220,10 @@ def host_room_command(room: UUID):
     if room is None:
         return abort(404)
 
-    if room.owner == session["_id"]:
+    api_key = request.headers.get("X-Api-Key")
+    is_owner = room.owner == session.get("_id") or (app.config["ADMIN_API_KEY"] and api_key and api_key == app.config["ADMIN_API_KEY"])
+
+    if is_owner:
         cmd = request.form["cmd"]
         if cmd:
             Command(room=room, commandtext=cmd)
