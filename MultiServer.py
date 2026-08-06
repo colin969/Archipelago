@@ -305,7 +305,7 @@ class Context:
         self.commandprocessor = ServerCommandProcessor(self)
         self.embedded_blacklist = {"host", "port"}
         self.client_ids: typing.Dict[typing.Tuple[int, int], datetime.datetime] = {}
-        self.auto_save_interval = 40  # in seconds
+        self.auto_save_interval = 60  # in seconds
         self.auto_saver_thread: typing.Optional[threading.Thread] = None
         self.save_dirty = False
         self.tags = ['AP']
@@ -616,6 +616,19 @@ class Context:
             self.read_data[f"item_name_groups_{game_name}"] = lambda lgame=game_name: self.item_name_groups[lgame]
         for game_name, data in self.location_name_groups.items():
             self.read_data[f"location_name_groups_{game_name}"] = lambda lgame=game_name: self.location_name_groups[lgame]
+
+        # Same for lifetime, we can reduce allocations by building part of room info early
+        self.static_room_info = {
+            "games": {self.games[x] for x in range(1, len(self.games) + 1)} | {"Archipelago"},
+            "version": version_tuple,
+            "generator_version": self.generator_version,
+            "seed_name": self.seed_name,
+            "datapackage_checksums": {
+                game: data["checksum"]
+                for game, data in self.gamespackage.items()
+                if "checksum" in data
+            },
+        }
 
         # sorted access spheres
         self.spheres = decoded_obj.get("spheres", [])
@@ -987,19 +1000,14 @@ async def on_client_connected(ctx: Context, client: Client):
     await ctx.send_msgs(client, [{
         'cmd': 'RoomInfo',
         'password': bool(ctx.password),
-        'games': games,
         # tags are for additional features in the communication.
         # Name them by feature or fork, as you feel is appropriate.
         'tags': ctx.tags,
-        'version': version_tuple,
-        'generator_version': ctx.generator_version,
         'permissions': get_permissions(ctx),
         'hint_cost': ctx.hint_cost,
         'location_check_points': ctx.location_check_points,
-        'datapackage_checksums': {game: game_data["checksum"] for game, game_data
-                                  in ctx.gamespackage.items() if game in games and "checksum" in game_data},
-        'seed_name': ctx.seed_name,
         'time': time.time(),
+        **ctx.static_room_info
     }])
 
 
