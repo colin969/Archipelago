@@ -308,6 +308,7 @@ class Context:
         self.tags = ['AP']
         self._broadcast_buffer: typing.List[typing.Tuple[typing.List[Client], typing.List[dict]]] = []
         self._broadcast_flush_task: typing.Optional[asyncio.Task] = None
+        self.broadcast_max_batch_size: int = 1000
         self.games: typing.Dict[int, str] = {}
         self.minimum_client_versions: typing.Dict[int, Version] = {}
         self.seed_name = ""
