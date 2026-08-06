@@ -226,7 +226,8 @@ class Context:
                       "collect_mode": str,
                       "countdown_mode": str,
                       "item_cheat": bool,
-                      "compatibility": int}
+                      "compatibility": int,
+                      "broadcast_max_batch_size": int}
     # team -> slot id -> list of clients authenticated to slot.
     clients: typing.Dict[int, typing.Dict[int, typing.List[Client]]]
     endpoints: list[Client]
@@ -457,11 +458,14 @@ class Context:
             endpoints = endpoint_lookup[key]
             sockets = [ep.socket for ep in endpoints if ep.socket and ep.socket.open]
             if sockets:
-                data = self.dumper(messages)
-                try:
-                    websockets.broadcast(sockets, data)
-                except RuntimeError:
-                    pass
+                # Send in chunks to avoid exceeding websocket payload limit (16MB)
+                for i in range(0, len(messages), self.broadcast_max_batch_size):
+                    chunk = messages[i:i + self.broadcast_max_batch_size]
+                    data = self.dumper(chunk)
+                    try:
+                        websockets.broadcast(sockets, data)
+                    except RuntimeError:
+                        pass
 
     def broadcast_text_all(self, text: str, additional_arguments: dict = {}):
         self.logger.info("Notice (all): %s" % text)
@@ -1180,11 +1184,12 @@ def register_location_checks(ctx: Context, team: int, slot: int, locations: typi
             sortable.append((target_player, item_id, location, flags))
 
         info_texts: list[dict[str, typing.Any]] = []
+        log_lines: list[str] = []
         for target_player, item_id, location, flags in sorted(sortable):
             new_item = NetworkItem(item_id, location, slot, flags)
             send_items_to(ctx, team, target_player, new_item)
 
-            ctx.logger.info('(Team #%d) %s sent %s to %s (%s)' % (
+            log_lines.append('(Team #%d) %s sent %s to %s (%s)' % (
                 team + 1, ctx.player_names[(team, slot)], ctx.item_names[ctx.slot_info[target_player].game][item_id],
                 ctx.player_names[(team, target_player)], ctx.location_names[ctx.slot_info[slot].game][location]))
             if len(info_texts) >= 140:
@@ -1194,7 +1199,10 @@ def register_location_checks(ctx: Context, team: int, slot: int, locations: typi
                 info_texts.clear()
             info_texts.append(json_format_send_event(new_item, target_player))
         ctx.broadcast_team(team, info_texts)
+        if log_lines:
+            ctx.logger.info('\n'.join(log_lines))
         del info_texts
+        del log_lines
         del sortable
 
         ctx.location_checks[team, slot] |= new_locations
