@@ -180,8 +180,6 @@ class Client(Endpoint):
         self.slot = None
         self.send_index = 0
         self.tags = []
-        self._broadcast_buffer: typing.List[typing.Tuple[typing.List[Client], typing.List[dict]]] = []
-        self._broadcast_flush_task: typing.Optional[asyncio.Task] = None
         self.messageprocessor = client_message_processor(ctx, self)
         self.ctx = weakref.ref(ctx)
         self.remote_items = False
@@ -307,6 +305,8 @@ class Context:
         self.auto_saver_thread: typing.Optional[threading.Thread] = None
         self.save_dirty = False
         self.tags = ['AP']
+        self._broadcast_buffer: typing.List[typing.Tuple[typing.List[Client], typing.List[dict]]] = []
+        self._broadcast_flush_task: typing.Optional[asyncio.Task] = None
         self.games: typing.Dict[int, str] = {}
         self.minimum_client_versions: typing.Dict[int, Version] = {}
         self.seed_name = ""
@@ -1110,12 +1110,11 @@ def send_new_items(ctx: Context):
                 items = get_received_items(ctx, team, slot, client.remote_items)
                 if len(start_inventory) + len(items) > client.send_index:
                     first_new_item = max(0, client.send_index - len(start_inventory))
-                    async_start(ctx.send_msgs(client, [{
+                    ctx.broadcast([client], [{
                         "cmd": "ReceivedItems",
                         "index": client.send_index,
-                        "items": start_inventory[client.send_index:] + items[first_new_item:]}]))
+                        "items": start_inventory[client.send_index:] + items[first_new_item:]}])
                     client.send_index = len(start_inventory) + len(items)
-
 
 def update_checked_locations(ctx: Context, team: int, slot: int):
     ctx.broadcast(ctx.clients[team][slot],
