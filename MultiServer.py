@@ -2073,7 +2073,7 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
             client.no_locations = bool(client.tags & _non_game_messages.keys())
             # set NoText for old PopTracker clients that predate the tag to save traffic
             client.no_text = "NoText" in client.tags or ("PopTracker" in client.tags and client.version < (0, 5, 1))
-            client.reduced_traffic = True
+            client.reduced_traffic = bool(args.get("reduced", False))
 
             # Break up client list to avoid iterating more when reducing broadcasts
             if client.reduced_traffic:
