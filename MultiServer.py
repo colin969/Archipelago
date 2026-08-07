@@ -484,6 +484,7 @@ class Context:
         msg = {**{"cmd": "PrintJSON", "data": [{"text": text}]}, **additional_arguments}
         data = self.dumper([msg])
 
+        # Should cover the things we care about
         slot = msg.get("receiving") or msg.get("slot")
 
         for team in self.clients:
@@ -514,11 +515,12 @@ class Context:
                 recv_slot = msg.get("receiving")
                 if recv_slot:
                     slot_msgs.setdefault(recv_slot, []).append(msg)
-                    continue
-                send_slot = msg.get("slot")
-                if send_slot:
-                    slot_msgs.setdefault(send_slot, []).append(msg)
-                    continue
+                item = msg.get("item")
+                if item is not None:
+                    send_slot = item.player
+                    if send_slot != recv_slot:
+                        slot_msgs.setdefault(send_slot, []).append(msg)
+                continue
             unfiltered_msgs.append(msg)
 
         all_data = self.dumper(msgs)
