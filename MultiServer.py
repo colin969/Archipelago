@@ -47,6 +47,7 @@ from NetUtils import Endpoint, ClientStatus, NetworkItem, decode, encode, Networ
     SlotType, LocationStore, MultiData, Hint, HintStatus
 from BaseClasses import ItemClassification
 
+printjson_reduced_filter = frozenset({"Join", "Part", "TagsChanged", "ItemSend", "ItemCheat", "Hint"})
 
 min_client_version = Version(0, 5, 0)
 colorama.just_fix_windows_console()
@@ -156,6 +157,7 @@ class Client(Endpoint):
         "no_items",
         "no_locations",
         "no_text",
+        "reduced_traffic",
     )
 
     version: Version
@@ -171,6 +173,7 @@ class Client(Endpoint):
     no_items: bool
     no_locations: bool
     no_text: bool
+    reduced_traffic: bool
 
     def __init__(self, socket: "ServerConnection", ctx: Context) -> None:
         super().__init__(socket)
@@ -187,6 +190,7 @@ class Client(Endpoint):
         self.no_items = False
         self.no_locations = False
         self.no_text = False
+        self.reduced_traffic = False
 
     @property
     def items_handling(self):
@@ -322,6 +326,10 @@ class Context:
         self.stored_data_notification_clients = collections.defaultdict(weakref.WeakSet)
         self.read_data = {}
         self.spheres = []
+
+        self.full_feed_clients = {}
+        # [team, slot] clients lookup
+        self.reduced_clients = {}  
 
         # init empty to satisfy linter, I suppose
         self.gamespackage = {}
@@ -473,17 +481,69 @@ class Context:
 
     def broadcast_text_all(self, text: str, additional_arguments: dict = {}):
         self.logger.info("Notice (all): %s" % text)
-        self.broadcast_all([{**{"cmd": "PrintJSON", "data": [{ "text": text }]}, **additional_arguments}])
+        msg = {**{"cmd": "PrintJSON", "data": [{"text": text}]}, **additional_arguments}
+        data = self.dumper([msg])
+
+        slot = msg.get("receiving") or msg.get("slot")
+
+        for team in self.clients:
+            # Full feed clients
+            full_feed = [ep for ep in self.full_feed_clients[team] if not ep.no_text]
+            if full_feed:
+                async_start(self.broadcast_send_encoded_msgs(full_feed, data))
+
+            # Reduced clients
+            if slot:
+                slot_clients = self.reduced_clients[team][slot]
+                eligible = [ep for ep in slot_clients if not ep.no_text]
+                if eligible:
+                    async_start(self.broadcast_send_encoded_msgs(eligible, data))
+            else:
+                for slot_clients in self.reduced_clients[team].values():
+                    eligible = [ep for ep in slot_clients if not ep.no_text]
+                    if eligible:
+                        async_start(self.broadcast_send_encoded_msgs(eligible, data))
 
     def broadcast_team(self, team: int, msgs: typing.List[dict]):
         msg_is_text = all(msg["cmd"] == "PrintJSON" for msg in msgs)
-        data = self.dumper(msgs)
-        endpoints = (
-            endpoint
-            for endpoint in itertools.chain.from_iterable(self.clients[team].values())
-            if not (msg_is_text and endpoint.no_text)
-        )
-        async_start(self.broadcast_send_encoded_msgs(endpoints, data))
+        
+        unfiltered_msgs = []
+        slot_msgs: typing.Dict[int, typing.List[dict]] = {}
+        for msg in msgs:
+            if msg["cmd"] == "PrintJSON" and msg.get("type") in printjson_reduced_filter:
+                recv_slot = msg.get("receiving")
+                if recv_slot:
+                    slot_msgs.setdefault(recv_slot, []).append(msg)
+                    continue
+                send_slot = msg.get("slot")
+                if send_slot:
+                    slot_msgs.setdefault(send_slot, []).append(msg)
+                    continue
+            unfiltered_msgs.append(msg)
+
+        all_data = self.dumper(msgs)
+
+        # Full feed clients (currently empty during testing since all are reduced)
+        full_feed = self.full_feed_clients[team]
+        if full_feed:
+            if msg_is_text:
+                full_feed = [ep for ep in full_feed if not ep.no_text]
+            async_start(self.broadcast_send_encoded_msgs(full_feed, all_data))
+
+        # Reduced clients: unfiltered msgs to all, slot-specific msgs to matching slots
+        reduced_data = self.dumper(unfiltered_msgs) if unfiltered_msgs else None
+        if reduced_data:
+            for slot_clients in self.reduced_clients[team].values():
+                endpoints = [ep for ep in slot_clients if not (msg_is_text and ep.no_text)]
+                if endpoints:
+                    async_start(self.broadcast_send_encoded_msgs(endpoints, reduced_data))
+
+        for slot, slot_msg_list in slot_msgs.items():
+            slot_clients = self.reduced_clients[team][slot]
+            if slot_clients:
+                slot_data = self.dumper(slot_msg_list)
+                endpoints = [ep for ep in slot_clients if not (msg_is_text and ep.no_text)]
+                async_start(self.broadcast_send_encoded_msgs(endpoints, slot_data))
 
     def broadcast(self, endpoints: typing.Iterable[Client], msgs: typing.List[dict]):
         self._queue_broadcast(list(endpoints), msgs)
@@ -493,6 +553,11 @@ class Context:
             self.endpoints.remove(endpoint)
         if endpoint.slot and endpoint in self.clients[endpoint.team][endpoint.slot]:
             self.clients[endpoint.team][endpoint.slot].remove(endpoint)
+        if endpoint.team is not None:
+            if endpoint.reduced_traffic:
+                self.reduced_clients[endpoint.team][endpoint.slot].remove(endpoint)
+            else:
+                self.full_feed_clients[endpoint.team].remove(endpoint)
         await on_client_disconnected(self, endpoint)
 
     def notify_client(self, client: Client, text: str, additional_arguments: dict = {}):
@@ -563,9 +628,13 @@ class Context:
         slot_info: NetworkSlot
         slot_id: int
 
+        self.full_feed_clients = {0: []}
+        self.reduced_clients = {0: {}}
+
         team_0 = self.clients[0]
         for slot_id, slot_info in self.slot_info.items():
             team_0[slot_id] = []
+            self.reduced_clients[0][slot_id] = []
             self.player_names[0, slot_id] = slot_info.name
             self.player_name_lookup[slot_info.name] = 0, slot_id
             self.read_data[f"hints_{0}_{slot_id}"] = lambda local_team=0, local_player=slot_id: \
@@ -2004,6 +2073,14 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
             client.no_locations = bool(client.tags & _non_game_messages.keys())
             # set NoText for old PopTracker clients that predate the tag to save traffic
             client.no_text = "NoText" in client.tags or ("PopTracker" in client.tags and client.version < (0, 5, 1))
+            client.reduced_traffic = True
+
+            # Break up client list to avoid iterating more when reducing broadcasts
+            if client.reduced_traffic:
+                ctx.reduced_clients[team][slot].append(client)
+            else:
+                ctx.full_feed_clients[team].append(client)
+
             connected_packet = {
                 "cmd": "Connected",
                 "team": client.team, "slot": client.slot,
