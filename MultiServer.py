@@ -2560,9 +2560,10 @@ class ServerCommandProcessor(CommonCommandProcessor):
                 affected_slots = send_items_to(self.ctx, team, slot, *new_items)
 
                 send_new_items(self.ctx, affected_slots)
-                self.ctx.broadcast_text_all(
-                    'Cheat console: sending ' + ('' if amount == 1 else f'{amount} of ') +
-                    f'"{item_name}" to {self.ctx.get_aliased_name(team, slot)}')
+                # Suppress this until we can better filter?
+                # self.ctx.broadcast_text_all(
+                #     'Cheat console: sending ' + ('' if amount == 1 else f'{amount} of ') +
+                #     f'"{item_name}" to {self.ctx.get_aliased_name(team, slot)}')
                 return True
             else:
                 self.output(response)
