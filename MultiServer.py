@@ -2063,6 +2063,11 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
             team, slot = ctx.connect_names[args['name']]
             if client.auth and client.team is not None and client.slot in ctx.clients[client.team]:
                 ctx.clients[team][slot].remove(client)  # re-auth, remove old entry
+                if client.reduced_traffic and client in ctx.reduced_clients[client.team].get(client.slot, []):
+                    ctx.reduced_clients[client.team][client.slot].remove(client)
+                elif client in ctx.full_feed_clients.get(client.team, []):
+                    ctx.full_feed_clients[client.team].remove(client)
+
                 if client.team != team or client.slot != slot:
                     client.auth = False  # swapping Team/Slot
             client.team = team
