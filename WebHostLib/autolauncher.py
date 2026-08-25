@@ -43,6 +43,7 @@ def _mp_gen_game(
     sid=None,
     timeout: int|None = None,
 ) -> PrimaryKey | None:
+    from .generate import gen_game
     from setproctitle import setproctitle
 
     setproctitle(f"Generator ({sid})")
@@ -233,4 +234,3 @@ class MultiworldInstance():
 
 from .models import Room, Generation, STATE_QUEUED, STATE_STARTED, STATE_ERROR, db, Seed, Slot
 from .customserver import run_server_process, get_static_server_data
-from .generate import gen_game
