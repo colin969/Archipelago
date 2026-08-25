@@ -495,15 +495,21 @@ class Context:
 
             # Reduced clients
             if slot:
+                # Slot specific
                 slot_clients = self.reduced_clients[team][slot]
                 eligible = [ep for ep in slot_clients if not ep.no_text]
                 if eligible:
                     async_start(self.broadcast_send_encoded_msgs(eligible, data))
             else:
-                for slot_clients in self.reduced_clients[team].values():
-                    eligible = [ep for ep in slot_clients if not ep.no_text]
-                    if eligible:
-                        async_start(self.broadcast_send_encoded_msgs(eligible, data))
+                # Not slot specific (broadcast to all reduced clients)
+                endpoints = [
+                    ep
+                    for slot_clients in self.reduced_clients[team].values()
+                    for ep in slot_clients
+                    if not ep.no_text
+                ]
+                if endpoints:
+                    async_start(self.broadcast_send_encoded_msgs(endpoints, data))
 
     def broadcast_team(self, team: int, msgs: typing.List[dict]):
         msg_is_text = all(msg["cmd"] == "PrintJSON" for msg in msgs)
@@ -535,10 +541,14 @@ class Context:
         # Reduced clients: unfiltered msgs to all, slot-specific msgs to matching slots
         reduced_data = self.dumper(unfiltered_msgs) if unfiltered_msgs else None
         if reduced_data:
-            for slot_clients in self.reduced_clients[team].values():
-                endpoints = [ep for ep in slot_clients if not (msg_is_text and ep.no_text)]
-                if endpoints:
-                    async_start(self.broadcast_send_encoded_msgs(endpoints, reduced_data))
+            endpoints = [
+                ep
+                for slot_clients in self.reduced_clients[team].values()
+                for ep in slot_clients
+                if not (msg_is_text and ep.no_text)
+            ]
+            if endpoints:
+                async_start(self.broadcast_send_encoded_msgs(endpoints, reduced_data))
 
         for slot, slot_msg_list in slot_msgs.items():
             slot_clients = self.reduced_clients[team][slot]
