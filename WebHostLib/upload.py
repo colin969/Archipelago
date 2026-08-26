@@ -167,6 +167,51 @@ def upload_zip_to_db(zfile: zipfile.ZipFile, owner=None, meta={"race": False}, s
     else:
         flash("No multidata was found in the zip file, which is required.")
 
+# Route specific for APX to allow uploads with immediate room creation
+@app.route("/api/upload_room", methods=["POST"])
+def upload_room():
+    api_key = request.headers.get("X-Api-Key")
+    allowed = app.config["ADMIN_API_KEY"] and api_key and api_key == app.config["ADMIN_API_KEY"]
+    if not allowed:
+        return jsonify({"error": "forbidden"}), 403
+
+    """Upload a .archipelago or .zip, create the room immediately, return room Id as JSON."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided."}), 400
+
+    uploaded_file = request.files["file"]
+    if uploaded_file.filename == "":
+        return jsonify({"error": "No selected file."}), 400
+
+    if not allowed_generation(uploaded_file.filename):
+        return jsonify({"error": "Not a recognized file format. Expected .archipelago or .zip."}), 400
+
+    try:
+        if zipfile.is_zipfile(uploaded_file):
+            with zipfile.ZipFile(uploaded_file, "r") as zfile:
+                seed = upload_zip_to_db(zfile, owner=session["_id"])
+        else:
+            uploaded_file.seek(0)
+            multidata = uploaded_file.read()
+            slots, multidata = process_multidata(multidata)
+            seed = Seed(multidata=multidata, slots=slots, owner=session["_id"])
+            flush()
+
+        if isinstance(seed, str):
+            return jsonify({"error": seed}), 400
+
+        if not seed:
+            return jsonify({"error": "No multidata found in file."}), 400
+
+        room = Room(seed=seed, owner=session["_id"], tracker=uuid4())
+        commit()
+
+        return jsonify({"room_id": str(room.id)}), 201
+
+    except VersionException:
+        return jsonify({"error": "Wrong version detected."}), 400
+    except Exception as e:
+        return jsonify({"error": f"Could not process file: {e}"}), 500
 
 @app.route("/uploads", methods=["GET", "POST"])
 def uploads():

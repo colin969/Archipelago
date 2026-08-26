@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import warnings
 from enum import StrEnum
@@ -229,6 +230,56 @@ def host_room_command(room: UUID):
             Command(room=room, commandtext=cmd)
             commit()
     return redirect(url_for("host_room", room=room.id))
+
+@app.get("/room/<suuid:room>/status")
+@db_session
+def room_status(room: UUID):
+    room: Room = Room.get(id=room)
+    if room is None:
+        return abort(404)
+
+    api_key = request.headers.get("X-Api-Key")
+    is_owner = room.owner == session.get("_id") or (app.config["ADMIN_API_KEY"] and api_key and api_key == app.config["ADMIN_API_KEY"])
+    if not is_owner:
+        return Response(
+            json.dumps({"error": "forbidden"}),
+            mimetype="application/json",
+            status=403,
+        )
+
+    now = utcnow()
+    is_alive = (
+        room.last_port is not None
+        and room.last_activity >= now - datetime.timedelta(seconds=room.timeout)
+    )
+
+    if not is_alive:
+        # Trigger spinup
+        room.last_activity = now
+        commit()
+
+        # Wait for port to be assigned
+        deadline = now + datetime.timedelta(seconds=15)
+        while utcnow() < deadline:
+            time.sleep(0.5)
+            with db_session:
+                refreshed = Room.get(id=room.id)
+                if refreshed and refreshed.last_port:
+                    return Response(
+                        json.dumps({"alive": True, "port": refreshed.last_port}),
+                        mimetype="application/json",
+                    )
+
+        return Response(
+            json.dumps({"alive": False, "port": None}),
+            mimetype="application/json",
+            status=503,
+        )
+
+    return Response(
+        json.dumps({"alive": True, "port": room.last_port}),
+        mimetype="application/json",
+    )
 
 
 @app.get("/room/<suuid:room>")
