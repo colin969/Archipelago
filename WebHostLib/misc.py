@@ -249,7 +249,7 @@ def room_status(room: UUID):
 
     now = utcnow()
     is_alive = (
-        room.last_port is not None
+        room.last_port is not None and room.last_port > 0
         and room.last_activity >= now - datetime.timedelta(seconds=room.timeout)
     )
 

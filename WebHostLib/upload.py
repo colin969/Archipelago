@@ -1,24 +1,27 @@
 import json
 import pickle
+import time
 import typing
 import uuid
 import zipfile
 import zlib
 
 from io import BytesIO
-from flask import request, flash, redirect, url_for, session, render_template, abort
+from flask import request, flash, redirect, url_for, session, render_template, abort, jsonify
 from markupsafe import Markup
 from pony.orm import commit, flush, select, rollback
 from pony.orm.core import TransactionIntegrityError
 import schema
+import requests
 
 import MultiServer
 from NetUtils import GamesPackage, SlotType
 from Utils import VersionException, __version__
+from WebHostLib import to_url
 from worlds.Files import AutoPatchRegister
 from worlds.AutoWorld import data_package_checksum
 from . import app
-from .models import Seed, Room, Slot, GameDataPackage
+from .models import Seed, Room, Slot, GameDataPackage, uuid4
 
 banned_extensions = (".sfc", ".z64", ".n64", ".nes", ".smc", ".sms", ".gb", ".gbc", ".gba")
 allowed_options_extensions = (".yaml", ".json", ".yml", ".txt", ".zip")
@@ -206,7 +209,29 @@ def upload_room():
         room = Room(seed=seed, owner=session["_id"], tracker=uuid4())
         commit()
 
-        return jsonify({"room_id": str(room.id)}), 201
+        room_url = to_url(room.id)
+
+        # Wait for the room's multiserver port to come online (max 30s)
+        status_url = f"http://127.0.0.1:{app.config.get('PORT', 80)}/room/{room_url}/status"
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            try:
+                resp = requests.get(
+                    status_url,
+                    headers={"X-Api-Key": api_key},
+                    timeout=3,
+                )
+                if resp.ok and resp.json().get("alive"):
+                    break
+            except Exception as e:
+                pass
+            time.sleep(0.5)
+        else:
+            room.delete()
+            commit()
+            return jsonify({"error": "Room did not come online in time"}), 503
+
+        return jsonify({"room_id": room_url}), 201
 
     except VersionException:
         return jsonify({"error": "Wrong version detected."}), 400
