@@ -254,22 +254,9 @@ def room_status(room: UUID):
     )
 
     if not is_alive:
-        # Trigger spinup
+        # Spin up room, let client poll for status later
         room.last_activity = now
         commit()
-
-        # Wait for port to be assigned
-        deadline = now + datetime.timedelta(seconds=15)
-        while utcnow() < deadline:
-            time.sleep(0.5)
-            with db_session:
-                refreshed = Room.get(id=room.id)
-                if refreshed and refreshed.last_port:
-                    return Response(
-                        json.dumps({"alive": True, "port": refreshed.last_port}),
-                        mimetype="application/json",
-                    )
-
         return Response(
             json.dumps({"alive": False, "port": None}),
             mimetype="application/json",
@@ -278,6 +265,43 @@ def room_status(room: UUID):
 
     return Response(
         json.dumps({"alive": True, "port": room.last_port}),
+        mimetype="application/json",
+    )
+
+@app.post("/room/<suuid:room>/stop")
+def stop_room_route(room: UUID):
+    room_obj: Room = Room.get(id=room)
+    if room_obj is None:
+        return abort(404)
+
+    api_key = request.headers.get("X-Api-Key")
+    is_owner = (
+        room_obj.owner == session.get("_id")
+        or (app.config["ADMIN_API_KEY"] and api_key and api_key == app.config["ADMIN_API_KEY"])
+    )
+    if not is_owner:
+        return Response(
+            json.dumps({"error": "forbidden"}),
+            mimetype="application/json",
+            status=403,
+        )
+
+    from datetime import timedelta
+    from .models import Command
+
+    # Fake last activity to convince it to stay down
+    now = utcnow()
+    room_obj.last_activity = now - timedelta(days=3)  # mark as idle
+
+    # Room is up
+    if room_obj.last_port and room_obj.last_port > 0:
+        Command(room=room_obj, commandtext="/exit")
+
+    room_obj.last_port = 0
+    commit()
+
+    return Response(
+        json.dumps({"stopped": True}),
         mimetype="application/json",
     )
 
