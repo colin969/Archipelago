@@ -305,7 +305,6 @@ def stop_room_route(room: UUID):
         mimetype="application/json",
     )
 
-
 @app.get("/room/<suuid:room>")
 def host_room(room: UUID):
     room: Room = Room.get(id=room)
