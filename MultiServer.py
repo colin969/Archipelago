@@ -2072,7 +2072,7 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
         else:
             team, slot = ctx.connect_names[args['name']]
             if client.auth and client.team is not None and client.slot in ctx.clients[client.team]:
-                ctx.clients[team][slot].remove(client)  # re-auth, remove old entry
+                ctx.clients[client.team][client.slot].remove(client)  # re-auth, remove old entry
                 if client.reduced_traffic and client in ctx.reduced_clients[client.team].get(client.slot, []):
                     ctx.reduced_clients[client.team][client.slot].remove(client)
                 elif client in ctx.full_feed_clients.get(client.team, []):
@@ -2566,7 +2566,6 @@ class ServerCommandProcessor(CommonCommandProcessor):
                 if amount > 100:
                     raise ValueError(f"{amount} is invalid. Maximum is 100.")
                 new_items = [NetworkItem(names[item_name], -1, 0) for _ in range(int(amount))]
-                send_items_to(self.ctx, team, slot, *new_items)
                 affected_slots = send_items_to(self.ctx, team, slot, *new_items)
 
                 send_new_items(self.ctx, affected_slots)
