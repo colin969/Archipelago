@@ -2,11 +2,12 @@ from typing import Any, Dict
 from uuid import UUID
 import zlib
 
-from flask import abort, url_for
+from flask import abort, url_for, request
 
 from WebHostLib import to_url
 import worlds.Files
 from . import api_endpoints, get_players
+from .. import app
 from ..models import Room
 from ..tracker import TrackerData
 from Utils import restricted_loads
@@ -35,7 +36,7 @@ def room_info(room_id: UUID) -> Dict[str, Any]:
             }
             downloads.append(slot_download)
 
-    return {
+    data = {
         "tracker": to_url(room.tracker),
         "players": get_players(room.seed),
         "last_port": room.last_port,
@@ -43,6 +44,12 @@ def room_info(room_id: UUID) -> Dict[str, Any]:
         "timeout": room.timeout,
         "downloads": downloads,
     }
+
+    api_key = request.headers.get("X-Api-Key")
+    if api_key and app.config["ADMIN_API_KEY"] and (api_key == app.config["ADMIN_API_KEY"]):
+        data["apx_server_password"] = room.apx_server_password
+
+    return data
 
 @api_endpoints.route('/room/<suuid:room_id>/players')
 def room_players(room_id: UUID) -> Dict[str, Any]:

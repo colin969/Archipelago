@@ -1,5 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
+import string
+import secrets
 from pony.orm import Database, PrimaryKey, Required, Set, Optional, buffer, LongStr
 
 from Utils import utcnow
@@ -33,6 +35,7 @@ class Room(db.Entity):
     tracker = Optional(UUID, index=True)
     # Port special value -1 means the server errored out. Another attempt can be made with a page refresh
     last_port = Optional(int, default=lambda: 0)
+    apx_server_password = Required(str, default=lambda: ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12)))
 
 
 class Seed(db.Entity):

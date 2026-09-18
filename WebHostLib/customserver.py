@@ -12,6 +12,8 @@ import socket
 import threading
 import time
 import typing
+import string
+import random
 import sys
 
 import websockets
@@ -104,6 +106,7 @@ class WebHostContext(Context):
             commands = select(command for command in Command if command.room.id == self.room_id)
             if commands:
                 for command in commands:
+                    self.logger.info(f"Room {self.room_id} running command: {command.commandtext!r}")
                     self.main_loop.call_soon_threadsafe(cmdprocessor, command.commandtext)
                     command.delete()
                 commit()
@@ -116,6 +119,7 @@ class WebHostContext(Context):
             self.port = room.last_port
         else:
             self.port = get_random_port()
+        self.apx_server_password = room.apx_server_password
 
         multidata = self.decompress(room.seed.multidata)
         game_data_packages = {}

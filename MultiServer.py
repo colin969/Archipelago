@@ -281,6 +281,7 @@ class Context:
         self.host = host
         self.port = port
         self.server_password = server_password
+        self.apx_server_password = None
         self.password = password
         self.server = None
         self.countdown_timer = 0
@@ -1625,7 +1626,7 @@ class ClientMessageProcessor(CommonCommandProcessor):
         self.ctx.broadcast_text_all(self.ctx.get_aliased_name(self.client.team, self.client.slot) + ': ' + output,
                                     {"type": "Chat", "team": self.client.team, "slot": self.client.slot, "message": output})
 
-        if not self.ctx.server_password:
+        if not self.ctx.server_password and not self.ctx.apx_server_password:
             self.output("Sorry, Remote administration is disabled")
             return False
 
@@ -1638,7 +1639,7 @@ class ClientMessageProcessor(CommonCommandProcessor):
             return True
 
         if command.startswith("login "):
-            if command == f"login {self.ctx.server_password}":
+            if (self.ctx.server_password and command == f"login {self.ctx.server_password}") or (self.ctx.apx_server_password and command == f"login {self.ctx.apx_server_password}"):
                 self.output("Login successful. You can now issue server side commands.")
                 self.ctx.commandprocessor.client = self.client
                 return True
@@ -2570,9 +2571,10 @@ class ServerCommandProcessor(CommonCommandProcessor):
 
                 send_new_items(self.ctx, affected_slots)
                 # Suppress this until we can better filter?
-                # self.ctx.broadcast_text_all(
-                #     'Cheat console: sending ' + ('' if amount == 1 else f'{amount} of ') +
-                #     f'"{item_name}" to {self.ctx.get_aliased_name(team, slot)}')
+                self.ctx.broadcast_text_all(
+                    'Cheat console: sending ' + ('' if amount == 1 else f'{amount} of ') +
+                    f'"{item_name}" to {self.ctx.get_aliased_name(team, slot)}',
+                    {"type": "ItemCheat", "team": team, "receiving": slot, "item": new_items[0]})
                 return True
             else:
                 self.output(response)

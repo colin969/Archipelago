@@ -213,6 +213,7 @@ Will provide a dict of room data with the following keys:
 - The room timeout counter (`timeout`)
 - A list of downloads for files required for gameplay (`downloads`)
     - Each item is a dict containing the download URL and slot (`slot`, `download`)
+- Generated server password ('apx_server_password'), only if access with the admin api key
 
 Example:
 ```json
