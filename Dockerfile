@@ -73,6 +73,9 @@ COPY --from=cython-builder /build/*.so ./
 # Run ModuleUpdate
 RUN python ModuleUpdate.py -y
 
+# MariaDB support
+RUN pip install pymysql
+
 # Purge unneeded packages
 RUN apt-get purge -y \
     git \

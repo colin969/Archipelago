@@ -213,7 +213,7 @@ def upload_room():
 
         # Wait for the room's multiserver port to come online (max 30s)
         status_url = f"http://127.0.0.1:{app.config.get('PORT', 80)}/room/{room_url}/status"
-        deadline = time.time() + 15
+        deadline = time.time() + 60
         while time.time() < deadline:
             try:
                 resp = requests.get(
