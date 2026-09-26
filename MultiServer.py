@@ -97,6 +97,7 @@ ServerLimits = typing.TypedDict('ServerLimits', {
     'max_int_bits': Limit,
     'max_list_len': Limit,
     'max_string_len': Limit,
+    'slot_total_limit': Limit,
 })
 
 def operator_replace(ctx: Context, old, new):
@@ -342,6 +343,8 @@ class Context:
     stored_data: typing.Dict[str, object]
     read_data: typing.Dict[str, object]
     stored_data_notification_clients: typing.Dict[str, typing.Set[Client]]
+    stored_data_slot_key_sizes: typing.Dict[int, typing.Dict[str, int]]
+    stored_data_slot_sizes: typing.Dict[int, int]
     slot_info: typing.Dict[int, NetworkSlot]
     generator_version = Version(0, 0, 0)
     checksums: typing.Dict[str, str]
@@ -367,6 +370,7 @@ class Context:
                  limit_max_int_bits: int = 128,
                  limit_max_list_len: int = 1 * 1024 * 1024,
                  limit_max_string_len: int = 1 * 1024 * 1024,
+                 limit_slot_total: int = 2 * 1024 * 1024,
                 ):
         self.logger = logger
         super(Context, self).__init__()
@@ -432,6 +436,8 @@ class Context:
         self.random = random.Random()
         self.stored_data = {}
         self.stored_data_notification_clients = collections.defaultdict(weakref.WeakSet)
+        self.stored_data_slot_key_sizes = collections.defaultdict(dict)
+        self.stored_data_slot_sizes = collections.defaultdict(int)
         self.read_data = {}
         self.spheres = []
 
@@ -439,9 +445,10 @@ class Context:
         # [team, slot] clients lookup
         self.reduced_clients = {}  
         self.limits = {
-            'max_int_bits': Limit("max_int_bits", limit_max_int_bits, "bits"),
-            'max_list_len': Limit("max_list_len", limit_max_list_len, "list elements"),
-            'max_string_len': Limit("max_string_len", limit_max_string_len, "string characters"),
+            "max_int_bits": Limit("max_int_bits", limit_max_int_bits, "bits"),
+            "max_list_len": Limit("max_list_len", limit_max_list_len, "list elements"),
+            "max_string_len": Limit("max_string_len", limit_max_string_len, "string characters"),
+            "slot_total_limit": Limit("slot_total_limit", limit_slot_total, "bytes per slot"),
         }
         self.disable_limit_commands = disable_limit_commands
         self.disable_string_modulo = True
@@ -934,8 +941,8 @@ class Context:
                              "release_mode": self.release_mode,
                              "remaining_mode": self.remaining_mode, "collect_mode": self.collect_mode,
                              "countdown_mode": self.countdown_mode,
-                             "item_cheat": self.item_cheat, "compatibility": self.compatibility}
-
+                             "item_cheat": self.item_cheat, "compatibility": self.compatibility},
+            "stored_data_slot_keys": {str(slot): list(keys) for slot, keys in self.stored_data_slot_key_sizes.items()},
         }
 
         return d
@@ -977,6 +984,17 @@ class Context:
 
         if "stored_data" in savedata:
             self.stored_data = savedata["stored_data"]
+
+        # Restore datastorage keys used by each slot, and recompute their slot total size from scratch
+        if "stored_data_slot_keys" in savedata:
+            for slot_str, keys in savedata["stored_data_slot_keys"].items():
+                slot = int(slot_str)
+                for key in keys:
+                    if key in self.stored_data:
+                        size = get_stored_value_size(self.stored_data[key])
+                        self.stored_data_slot_key_sizes[slot][key] = size
+                        self.stored_data_slot_sizes[slot] += size
+
         # count items and slots from lists for items_handling = remote
         self.logger.info(
             f'Loaded save file with {sum([len(v) for k, v in self.received_items.items() if k[2]])} received items '
@@ -2151,6 +2169,17 @@ def compute_value(ctx: Context, operation: str, lhs: typing.Any, rhs: typing.Any
 
     return value
 
+def get_stored_value_size(value) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, (dict, list)):
+        return len(encode(value))
+    if isinstance(value, int):
+        return (value.bit_length() + 7) // 8
+    return 0
+
 async def process_client_cmd(ctx: Context, client: Client, args: dict):
     try:
         cmd: str = args["cmd"]
@@ -2491,13 +2520,27 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
                 await ctx.send_msgs(client, [{'cmd': 'InvalidPacket', "type": "arguments",
                                               "text": 'Set', "original_cmd": cmd}])
                 return
+            key = args["key"]
             args["cmd"] = "SetReply"
             value = ctx.stored_data.get(args["key"], args.get("default", 0))
             args["original_value"] = copy.copy(value)
             args["slot"] = client.slot
+            # Do operation, validate result is in size
             for operation in args["operations"]:
                 value = compute_value(ctx, operation["operation"], value, operation["value"])
+            # Operation passed, make sure slot has enough storage left
+            new_size = get_stored_value_size(value)
+            old_size = ctx.stored_data_slot_key_sizes[client.slot].get(key, 0)
+            projected = ctx.stored_data_slot_sizes[client.slot] - old_size + new_size
+
+            # Always allow a shrinking operation
+            if new_size > old_size and projected > ctx.limits["slot_total_limit"].value:
+                raise LimitExceeded(ctx.limits["slot_total_limit"])
+            
+            # Passed, update storage vals
             ctx.stored_data[args["key"]] = args["value"] = value
+            ctx.stored_data_slot_key_sizes[client.slot][key] = new_size
+            ctx.stored_data_slot_sizes[client.slot] = projected
             targets = set(ctx.stored_data_notification_clients[args["key"]])
             if args.get("want_reply", False):
                 targets.add(client)
@@ -2869,7 +2912,17 @@ class ServerCommandProcessor(CommonCommandProcessor):
             texts.append(f"Key: {key} | Size: {size}B")
         texts.insert(0, f"Found {len(self.ctx.stored_data)} keys, "
                         f"approximately totaling {Utils.format_SI_prefix(total, power=1024)}B")
+
+        if self.ctx.stored_data_slot_sizes:
+            slot_limit = self.ctx.limits["slot_total_limit"].value
+            slot_lines = [
+                f"  Slot {slot}: {Utils.format_SI_prefix(size, power=1024)}B / {Utils.format_SI_prefix(slot_limit, power=1024)}B"
+                for slot, size in sorted(self.ctx.stored_data_slot_sizes.items())
+            ]
+            texts.insert(1, "Per-slot usage:\n" + "\n".join(slot_lines))
+
         self.output("\n".join(texts))
+
 
     def _cmd_limits(self):
         """List all server limits and their values."""
@@ -3027,6 +3080,8 @@ def parse_args() -> argparse.Namespace:
         help="limit allowed number of elements per data storage value")
     parser.add_argument('--limit_max_string_len', default=defaults["limit_max_string_len"], type=int,
         help="limit allowed number of string characters per data storage value")
+    parser.add_argument('--limit_slot_total', default=defaults["limit_slot_total"], type=int,
+        help="limit total datastorage bytes per slot")
 
     args = parser.parse_args()
     return args
@@ -3079,6 +3134,7 @@ async def main(args: argparse.Namespace):
                   limit_max_int_bits = args.limit_max_int_bits,
                   limit_max_list_len = args.limit_max_list_len,
                   limit_max_string_len = args.limit_max_string_len,
+                  limit_slot_total = args.limit_slot_total,
                  )
     data_filename = args.multidata
 

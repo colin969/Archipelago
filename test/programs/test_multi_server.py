@@ -345,3 +345,110 @@ class TestDataStorageOperations(unittest.TestCase):
         assert result == max_int
 
         self.assertRaises(LimitExceeded, lambda: op_replace(0, max_int + 1))
+
+from MultiServer import Context, LimitExceeded, get_stored_value_size
+
+
+class TestSlotStorageLimits(unittest.TestCase):
+
+    def _make_ctx(self, slot_total: int = 100) -> Context:
+        return Context("", 0, "", "", 0, 0, False, limit_slot_total=slot_total)
+
+    def _simulate_set(self, ctx: Context, slot: int, key: str, value) -> None:
+        """Simulate what the Set handler does, minus the network layer."""
+        new_size = get_stored_value_size(value)
+        old_size = ctx.stored_data_slot_key_sizes[slot].get(key, 0)
+        projected = ctx.stored_data_slot_sizes[slot] - old_size + new_size
+
+        if new_size > old_size and projected > ctx.limits["slot_total_limit"].value:
+            raise LimitExceeded(ctx.limits["slot_total_limit"])
+
+        ctx.stored_data[key] = value
+        ctx.stored_data_slot_key_sizes[slot][key] = new_size
+        ctx.stored_data_slot_sizes[slot] = projected
+
+    def test_slot_write_within_limit(self):
+        ctx = self._make_ctx(slot_total=100)
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 50)
+        assert ctx.stored_data_slot_sizes[1] == 50
+
+    def test_slot_write_at_limit(self):
+        ctx = self._make_ctx(slot_total=100)
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 100)
+        assert ctx.stored_data_slot_sizes[1] == 100
+
+    def test_slot_write_exceeds_limit(self):
+        ctx = self._make_ctx(slot_total=100)
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 50)
+        self.assertRaises(LimitExceeded, lambda: self._simulate_set(ctx, slot=1, key="bar", value="a" * 51))
+
+    def test_slot_overwrite_same_key_grows(self):
+        ctx = self._make_ctx(slot_total=100)
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 50)
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 100)
+        assert ctx.stored_data_slot_sizes[1] == 100
+
+    def test_slot_overwrite_same_key_exceeds(self):
+        ctx = self._make_ctx(slot_total=100)
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 50)
+        self.assertRaises(LimitExceeded, lambda: self._simulate_set(ctx, slot=1, key="foo", value="a" * 101))
+
+    def test_slot_shrink_always_allowed(self):
+        ctx = self._make_ctx(slot_total=100)
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 100)
+        # Shrink should always succeed even if it would otherwise be "at limit"
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 1)
+        assert ctx.stored_data_slot_sizes[1] == 1
+
+    def test_slots_are_independent(self):
+        ctx = self._make_ctx(slot_total=100)
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 100)
+        # slot 2 should have its own budget
+        self._simulate_set(ctx, slot=2, key="foo", value="a" * 100)
+        assert ctx.stored_data_slot_sizes[1] == 100
+        assert ctx.stored_data_slot_sizes[2] == 100
+
+    def test_shared_key_different_slots_independent(self):
+        """Two slots writing the same key each count it toward their own total."""
+        ctx = self._make_ctx(slot_total=100)
+        self._simulate_set(ctx, slot=1, key="shared", value="a" * 60)
+        # slot 2 writes same key — slot 1's budget unaffected
+        self._simulate_set(ctx, slot=2, key="shared", value="a" * 60)
+        assert ctx.stored_data_slot_sizes[1] == 60
+        assert ctx.stored_data_slot_sizes[2] == 60
+        # slot 1 tries to grow beyond its budget
+        self.assertRaises(LimitExceeded, lambda: self._simulate_set(ctx, slot=1, key="other", value="a" * 41))
+
+    def test_save_restore_recomputes_sizes(self):
+        ctx = self._make_ctx(slot_total=100)
+        self._simulate_set(ctx, slot=1, key="foo", value="a" * 50)
+        self._simulate_set(ctx, slot=1, key="bar", value="a" * 30)
+
+        save = ctx.get_save()
+
+        ctx2 = self._make_ctx(slot_total=100)
+        # Manually restore stored_data as set_save would
+        ctx2.stored_data = save["stored_data"]
+        if "stored_data_slot_keys" in save:
+            for slot_str, keys in save["stored_data_slot_keys"].items():
+                slot = int(slot_str)
+                for key in keys:
+                    if key in ctx2.stored_data:
+                        size = get_stored_value_size(ctx2.stored_data[key])
+                        ctx2.stored_data_slot_key_sizes[slot][key] = size
+                        ctx2.stored_data_slot_sizes[slot] += size
+
+        assert ctx2.stored_data_slot_sizes[1] == 80
+        assert ctx2.stored_data_slot_key_sizes[1]["foo"] == 50
+        assert ctx2.stored_data_slot_key_sizes[1]["bar"] == 30
+
+    def test_get_stored_value_size_types(self):
+        assert get_stored_value_size(None) == 0, "None should be 0"
+        assert get_stored_value_size("abc") == 3, "3-char string should be 3"
+        assert get_stored_value_size(0) == 0, "0 should be 0 bytes"
+        assert get_stored_value_size(1) == 1, "1 should be 1 byte"
+        assert get_stored_value_size(255) == 1, "255 (8 bits) should be 1 byte"
+        assert get_stored_value_size(256) == 2, "256 (9 bits) should be 2 bytes"
+        assert get_stored_value_size([1, 2, 3]) > 0, "non-empty list should have positive size"
+        assert get_stored_value_size({"a": 1}) > 0, "non-empty dict should have positive size"
+
