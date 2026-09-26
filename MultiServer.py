@@ -98,6 +98,7 @@ ServerLimits = typing.TypedDict('ServerLimits', {
     'max_list_len': Limit,
     'max_string_len': Limit,
     'slot_total_limit': Limit,
+    'slot_key_limit': Limit,
 })
 
 def operator_replace(ctx: Context, old, new):
@@ -371,6 +372,7 @@ class Context:
                  limit_max_list_len: int = 1 * 1024 * 1024,
                  limit_max_string_len: int = 1 * 1024 * 1024,
                  limit_slot_total: int = 2 * 1024 * 1024,
+                 limit_slot_key_total: int = 5050, # 5k Jigsaw-ish
                 ):
         self.logger = logger
         super(Context, self).__init__()
@@ -449,6 +451,7 @@ class Context:
             "max_list_len": Limit("max_list_len", limit_max_list_len, "list elements"),
             "max_string_len": Limit("max_string_len", limit_max_string_len, "string characters"),
             "slot_total_limit": Limit("slot_total_limit", limit_slot_total, "bytes per slot"),
+            "slot_key_limit": Limit("slot_key_limit", limit_slot_key_total, "max set keys per slot"),
         }
         self.disable_limit_commands = disable_limit_commands
         self.disable_string_modulo = True
@@ -2521,6 +2524,10 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
                                               "text": 'Set', "original_cmd": cmd}])
                 return
             key = args["key"]
+            key_is_new = key not in ctx.stored_data_slot_key_sizes[client.slot]
+            if key_is_new and len(ctx.stored_data_slot_key_sizes[client.slot]) >= ctx.limits["slot_key_limit"].value:
+                raise LimitExceeded(ctx.limits["slot_key_limit"])
+
             args["cmd"] = "SetReply"
             value = ctx.stored_data.get(args["key"], args.get("default", 0))
             args["original_value"] = copy.copy(value)
@@ -3082,6 +3089,8 @@ def parse_args() -> argparse.Namespace:
         help="limit allowed number of string characters per data storage value")
     parser.add_argument('--limit_slot_total', default=defaults["limit_slot_total"], type=int,
         help="limit total datastorage bytes per slot")
+    parser.add_argument('--limit_slot_key_total', default=defaults["limit_slot_key_total"], type=int,
+        help="limit total datastorage bytes per slot")
 
     args = parser.parse_args()
     return args
@@ -3135,6 +3144,7 @@ async def main(args: argparse.Namespace):
                   limit_max_list_len = args.limit_max_list_len,
                   limit_max_string_len = args.limit_max_string_len,
                   limit_slot_total = args.limit_slot_total,
+                  limit_slot_key_total = args.limit_slot_key_total,
                  )
     data_filename = args.multidata
 

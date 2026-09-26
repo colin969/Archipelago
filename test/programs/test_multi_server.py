@@ -1,6 +1,6 @@
 import typing
 import unittest
-from MultiServer import Context, LimitExceeded, ServerCommandProcessor, compute_value
+from MultiServer import Context, LimitExceeded, ServerCommandProcessor, compute_value, get_stored_value_size
 
 
 class TestResolvePlayerName(unittest.TestCase):
@@ -346,19 +346,20 @@ class TestDataStorageOperations(unittest.TestCase):
 
         self.assertRaises(LimitExceeded, lambda: op_replace(0, max_int + 1))
 
-from MultiServer import Context, LimitExceeded, get_stored_value_size
-
-
 class TestSlotStorageLimits(unittest.TestCase):
 
-    def _make_ctx(self, slot_total: int = 100) -> Context:
-        return Context("", 0, "", "", 0, 0, False, limit_slot_total=slot_total)
+    def _make_ctx(self, slot_total: int = 100, slot_key_limit: int = 10) -> Context:
+        return Context("", 0, "", "", 0, 0, False, limit_slot_total=slot_total, limit_slot_key_total=slot_key_limit)
 
     def _simulate_set(self, ctx: Context, slot: int, key: str, value) -> None:
         """Simulate what the Set handler does, minus the network layer."""
         new_size = get_stored_value_size(value)
         old_size = ctx.stored_data_slot_key_sizes[slot].get(key, 0)
         projected = ctx.stored_data_slot_sizes[slot] - old_size + new_size
+
+        key_is_new = key not in ctx.stored_data_slot_key_sizes[slot]
+        if key_is_new and len(ctx.stored_data_slot_key_sizes[slot]) >= ctx.limits["slot_key_limit"].value:
+            raise LimitExceeded(ctx.limits["slot_key_limit"])
 
         if new_size > old_size and projected > ctx.limits["slot_total_limit"].value:
             raise LimitExceeded(ctx.limits["slot_total_limit"])
@@ -451,4 +452,31 @@ class TestSlotStorageLimits(unittest.TestCase):
         assert get_stored_value_size(256) == 2, "256 (9 bits) should be 2 bytes"
         assert get_stored_value_size([1, 2, 3]) > 0, "non-empty list should have positive size"
         assert get_stored_value_size({"a": 1}) > 0, "non-empty dict should have positive size"
+
+    def test_slot_key_limit_exceeded(self):
+        ctx = self._make_ctx(slot_total=10000, slot_key_limit=3)
+        self._simulate_set(ctx, slot=1, key="a", value="x")
+        self._simulate_set(ctx, slot=1, key="b", value="x")
+        self._simulate_set(ctx, slot=1, key="c", value="x")
+        self.assertRaises(LimitExceeded, lambda: self._simulate_set(ctx, slot=1, key="d", value="x"))
+
+    def test_slot_key_limit_overwrite_allowed(self):
+        """Overwriting an existing key does not count toward the key limit."""
+        ctx = self._make_ctx(slot_total=10000, slot_key_limit=2)
+        self._simulate_set(ctx, slot=1, key="a", value="x")
+        self._simulate_set(ctx, slot=1, key="b", value="x")
+        # Overwrite existing key — should not raise
+        self._simulate_set(ctx, slot=1, key="a", value="y")
+        assert ctx.stored_data["a"] == "y", "overwrite should succeed"
+
+    def test_slot_key_limit_independent_per_slot(self):
+        """Key limit is per slot — slot 2 has its own budget."""
+        ctx = self._make_ctx(slot_total=10000, slot_key_limit=2)
+        self._simulate_set(ctx, slot=1, key="a", value="x")
+        self._simulate_set(ctx, slot=1, key="b", value="x")
+        # slot 2 should have its own key budget
+        self._simulate_set(ctx, slot=2, key="a", value="x")
+        self._simulate_set(ctx, slot=2, key="b", value="x")
+        self.assertRaises(LimitExceeded, lambda: self._simulate_set(ctx, slot=1, key="c", value="x"))
+        self.assertRaises(LimitExceeded, lambda: self._simulate_set(ctx, slot=2, key="c", value="x"))
 
