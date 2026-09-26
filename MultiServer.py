@@ -99,6 +99,14 @@ ServerLimits = typing.TypedDict('ServerLimits', {
     'max_string_len': Limit,
 })
 
+def operator_replace(ctx: Context, old, new):
+    if isinstance(new, str):
+        ctx.limits['max_string_len'].check(len(new))
+    if isinstance(new, (dict, list)):
+        # Cheap size check, but close enough
+        ctx.limits['max_string_len'].check(len(encode(new)))
+    return new
+
 def operator_mod(ctx: Context, lhs, rhs):
     if ctx.disable_string_modulo and isinstance(lhs, str):
         raise ValueError("Can't modulo a string")
@@ -169,10 +177,17 @@ def pop_from_container(ctx: Context, container, value):
 
 
 def update_container_unique(ctx: Context, container, entries):
+    string_limit = ctx.limits['max_string_len'].value
     if isinstance(container, list):
         existing_container_as_set = set(container)
-        container.extend([entry for entry in entries if entry not in existing_container_as_set])
+        new_entries = [e for e in entries if e not in existing_container_as_set]
+        ctx.limits['max_list_len'].check(len(container) + len(new_entries))
+        container.extend(new_entries)
+    # Dict
     else:
+        # Cheap, can be 2x max size in result, but close enough
+        if len(encode(container)) > string_limit or len(encode(entries)) > string_limit:
+            raise LimitExceeded(ctx.limits['max_string_len'])
         container.update(entries)
     return container
 
@@ -195,7 +210,7 @@ def queue_gc():
 # functions callable on storable data on the server by clients
 modify_functions = {
     # generic:
-    "replace": lambda ctx, old, new: new,
+    "replace": operator_replace,
     "default": lambda ctx, old, new: old,
     # numeric:
     "add": operator_add,  # add together two objects, using python's "+" operator (works on strings and lists as append)

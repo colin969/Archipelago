@@ -256,3 +256,92 @@ class TestDataStorageOperations(unittest.TestCase):
         assert result == 1 << (max_int_bits - 1)
 
         self.assertRaises(LimitExceeded, lambda: op_lshift(1, max_int_bits))
+
+    def test_update_list(self):
+        ctx = Context("", 0, "", "", 0, 0, False)
+        op_update: DataStorageOp = lambda lhs, rhs: compute_value(ctx, "update", lhs, rhs)
+        max_list_len = ctx.limits["max_list_len"].value
+        max_list = list(range(max_list_len))
+
+        result = op_update([1, 2, 3], [2, 3, 4])
+        assert result == [1, 2, 3, 4]
+
+        result = op_update([1, 2, 3], [1, 2, 3])
+        assert result == [1, 2, 3]
+
+        result = op_update([], [1, 2, 3])
+        assert result == [1, 2, 3]
+
+        result = op_update([1, 2, 3], [])
+        assert result == [1, 2, 3]
+
+        result = op_update(max_list, max_list)
+        assert result == max_list
+
+        self.assertRaises(LimitExceeded, lambda: op_update(max_list, [max_list_len]))
+
+    def test_update_dict(self):
+        ctx = Context("", 0, "", "", 0, 0, False)
+        op_update: DataStorageOp = lambda lhs, rhs: compute_value(ctx, "update", lhs, rhs)
+        limit = ctx.limits["max_string_len"].value
+
+        # Basic merging
+        result = op_update({"a": 1}, {"b": 2})
+        assert result == {"a": 1, "b": 2}
+
+        result = op_update({"a": 1}, {"a": 99})
+        assert result == {"a": 99}
+
+        result = op_update({}, {"a": 1})
+        assert result == {"a": 1}
+
+        result = op_update({"a": 1}, {})
+        assert result == {"a": 1}
+
+        self.assertRaises(LimitExceeded, lambda: op_update({"k": "a" * (limit + 1)}, {}))
+
+        self.assertRaises(LimitExceeded, lambda: op_update({}, {"k": "a" * (limit + 1)}))
+
+    def test_replace_str(self):
+        ctx = Context("", 0, "", "", 0, 0, False)
+        op_replace: DataStorageOp = lambda lhs, rhs: compute_value(ctx, "replace", lhs, rhs)
+        limit = ctx.limits["max_string_len"].value
+
+        result = op_replace("old", "new")
+        assert result == "new"
+
+        result = op_replace("old", "a" * limit)
+        assert result == "a" * limit
+
+        self.assertRaises(LimitExceeded, lambda: op_replace("old", "a" * (limit + 1)))
+
+    def test_replace_list(self):
+        ctx = Context("", 0, "", "", 0, 0, False)
+        op_replace: DataStorageOp = lambda lhs, rhs: compute_value(ctx, "replace", lhs, rhs)
+        limit = ctx.limits["max_string_len"].value
+
+        result = op_replace([1, 2, 3], [4, 5, 6])
+        assert result == [4, 5, 6]
+
+        self.assertRaises(LimitExceeded, lambda: op_replace([], ["a" * (limit + 1)]))
+
+    def test_replace_dict(self):
+        ctx = Context("", 0, "", "", 0, 0, False)
+        op_replace: DataStorageOp = lambda lhs, rhs: compute_value(ctx, "replace", lhs, rhs)
+        limit = ctx.limits["max_string_len"].value
+
+        result = op_replace({"a": 1}, {"b": 2})
+        assert result == {"b": 2}
+
+        self.assertRaises(LimitExceeded, lambda: op_replace({}, {"k": "a" * (limit + 1)}))
+
+    def test_replace_int(self):
+        ctx = Context("", 0, "", "", 0, 0, False)
+        op_replace: DataStorageOp = lambda lhs, rhs: compute_value(ctx, "replace", lhs, rhs)
+        max_int_bits = ctx.limits["max_int_bits"].value
+        max_int = 2 ** max_int_bits - 1
+
+        result = op_replace(0, max_int)
+        assert result == max_int
+
+        self.assertRaises(LimitExceeded, lambda: op_replace(0, max_int + 1))
