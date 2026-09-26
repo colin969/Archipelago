@@ -107,7 +107,7 @@ def operator_replace(ctx: Context, old, new):
         ctx.limits['max_string_len'].check(len(new))
     if isinstance(new, (dict, list)):
         # Cheap size check, but close enough
-        ctx.limits['max_string_len'].check(len(encode(new)))
+        ctx.limits['max_string_len'].check(len(pickle.dumps(new)))
     return new
 
 def operator_mod(ctx: Context, lhs, rhs):
@@ -188,8 +188,7 @@ def update_container_unique(ctx: Context, container, entries):
         container.extend(new_entries)
     # Dict
     else:
-        # Cheap, can be 2x max size in result, but close enough
-        if len(encode(container)) > string_limit or len(encode(entries)) > string_limit:
+        if len(pickle.dumps(container)) > string_limit or len(pickle.dumps(entries)) > string_limit:
             raise LimitExceeded(ctx.limits['max_string_len'])
         container.update(entries)
     return container
@@ -2189,7 +2188,7 @@ def get_stored_value_size(value) -> int:
     if isinstance(value, str):
         return len(value)
     if isinstance(value, (dict, list)):
-        return len(encode(value))
+        return len(pickle.dumps(value))
     if isinstance(value, int):
         return (value.bit_length() + 7) // 8
     return 0
