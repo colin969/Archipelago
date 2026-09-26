@@ -97,6 +97,7 @@ ServerLimits = typing.TypedDict('ServerLimits', {
     'max_int_bits': Limit,
     'max_list_len': Limit,
     'max_string_len': Limit,
+    'max_key_len': Limit,
     'slot_total_limit': Limit,
     'slot_key_limit': Limit,
 })
@@ -371,6 +372,7 @@ class Context:
                  limit_max_int_bits: int = 128,
                  limit_max_list_len: int = 1 * 1024 * 1024,
                  limit_max_string_len: int = 1 * 1024 * 1024,
+                 limit_max_key_len: int = 128,
                  limit_slot_total: int = 2 * 1024 * 1024,
                  limit_slot_key_total: int = 5050, # 5k Jigsaw-ish
                 ):
@@ -450,6 +452,7 @@ class Context:
             "max_int_bits": Limit("max_int_bits", limit_max_int_bits, "bits"),
             "max_list_len": Limit("max_list_len", limit_max_list_len, "list elements"),
             "max_string_len": Limit("max_string_len", limit_max_string_len, "string characters"),
+            "max_key_len": Limit("max_key_len", limit_max_key_len, "char length of key"),
             "slot_total_limit": Limit("slot_total_limit", limit_slot_total, "bytes per slot"),
             "slot_key_limit": Limit("slot_key_limit", limit_slot_key_total, "max set keys per slot"),
         }
@@ -996,7 +999,7 @@ class Context:
                     if key in self.stored_data:
                         size = get_stored_value_size(self.stored_data[key])
                         self.stored_data_slot_key_sizes[slot][key] = size
-                        self.stored_data_slot_sizes[slot] += size
+                        self.stored_data_slot_sizes[slot] += size + len(key)
 
         # count items and slots from lists for items_handling = remote
         self.logger.info(
@@ -2524,6 +2527,8 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
                                               "text": 'Set', "original_cmd": cmd}])
                 return
             key = args["key"]
+            if len(key) > ctx.limits["max_key_len"].value:
+                raise LimitExceeded(ctx.limits["max_key_len"])
             key_is_new = key not in ctx.stored_data_slot_key_sizes[client.slot]
             if key_is_new and len(ctx.stored_data_slot_key_sizes[client.slot]) >= ctx.limits["slot_key_limit"].value:
                 raise LimitExceeded(ctx.limits["slot_key_limit"])
@@ -2538,7 +2543,7 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
             # Operation passed, make sure slot has enough storage left
             new_size = get_stored_value_size(value)
             old_size = ctx.stored_data_slot_key_sizes[client.slot].get(key, 0)
-            projected = ctx.stored_data_slot_sizes[client.slot] - old_size + new_size
+            projected = ctx.stored_data_slot_sizes[client.slot] - old_size + new_size + (len(key) if key_is_new else 0)
 
             # Always allow a shrinking operation
             if new_size > old_size and projected > ctx.limits["slot_total_limit"].value:
@@ -3087,10 +3092,12 @@ def parse_args() -> argparse.Namespace:
         help="limit allowed number of elements per data storage value")
     parser.add_argument('--limit_max_string_len', default=defaults["limit_max_string_len"], type=int,
         help="limit allowed number of string characters per data storage value")
+    parser.add_argument('--limit_max_key_len', default=defaults["limit_max_key_len"], type=int,
+        help="limit length of datastorage key")
     parser.add_argument('--limit_slot_total', default=defaults["limit_slot_total"], type=int,
         help="limit total datastorage bytes per slot")
     parser.add_argument('--limit_slot_key_total', default=defaults["limit_slot_key_total"], type=int,
-        help="limit total datastorage bytes per slot")
+        help="limit total datastorage keys that a slot can set")
 
     args = parser.parse_args()
     return args
@@ -3143,6 +3150,7 @@ async def main(args: argparse.Namespace):
                   limit_max_int_bits = args.limit_max_int_bits,
                   limit_max_list_len = args.limit_max_list_len,
                   limit_max_string_len = args.limit_max_string_len,
+                  limit_max_key_len = args.limit_max_key_len,
                   limit_slot_total = args.limit_slot_total,
                   limit_slot_key_total = args.limit_slot_key_total,
                  )
