@@ -345,8 +345,8 @@ class Context:
     stored_data: typing.Dict[str, object]
     read_data: typing.Dict[str, object]
     stored_data_notification_clients: typing.Dict[str, typing.Set[Client]]
-    stored_data_slot_key_sizes: typing.Dict[int, typing.Dict[str, int]]
-    stored_data_slot_sizes: typing.Dict[int, int]
+    stored_data_slot_key_sizes: typing.Dict[int, typing.Dict[int, typing.Dict[str, int]]]
+    stored_data_slot_sizes: typing.Dict[int, typing.Dict[int, int]]
     slot_info: typing.Dict[int, NetworkSlot]
     generator_version = Version(0, 0, 0)
     checksums: typing.Dict[str, str]
@@ -440,8 +440,8 @@ class Context:
         self.random = random.Random()
         self.stored_data = {}
         self.stored_data_notification_clients = collections.defaultdict(weakref.WeakSet)
-        self.stored_data_slot_key_sizes = collections.defaultdict(dict)
-        self.stored_data_slot_sizes = collections.defaultdict(int)
+        self.stored_data_slot_key_sizes = collections.defaultdict(lambda: collections.defaultdict(dict))
+        self.stored_data_slot_sizes = collections.defaultdict(lambda: collections.defaultdict(int))
         self.read_data = {}
         self.spheres = []
 
@@ -948,7 +948,13 @@ class Context:
                              "remaining_mode": self.remaining_mode, "collect_mode": self.collect_mode,
                              "countdown_mode": self.countdown_mode,
                              "item_cheat": self.item_cheat, "compatibility": self.compatibility},
-            "stored_data_slot_keys": {str(slot): list(keys) for slot, keys in self.stored_data_slot_key_sizes.items()},
+            "stored_data_slot_keys": {
+                str(team): {
+                    str(slot): list(keys)
+                    for slot, keys in slot_data.items()
+                }
+                for team, slot_data in self.stored_data_slot_key_sizes.items()
+            },
         }
 
         return d
@@ -993,13 +999,15 @@ class Context:
 
         # Restore datastorage keys used by each slot, and recompute their slot total size from scratch
         if "stored_data_slot_keys" in savedata:
-            for slot_str, keys in savedata["stored_data_slot_keys"].items():
-                slot = int(slot_str)
-                for key in keys:
-                    if key in self.stored_data:
-                        size = get_stored_value_size(self.stored_data[key])
-                        self.stored_data_slot_key_sizes[slot][key] = size
-                        self.stored_data_slot_sizes[slot] += size + len(key)
+            for team_str, slots in savedata["stored_data_slot_keys"].items():
+                team = int(team_str)
+                for slot_str, keys in slots.items():
+                    slot = int(slot_str)
+                    for key in keys:
+                        if key in self.stored_data:
+                            size = get_stored_value_size(self.stored_data[key])
+                            self.stored_data_slot_key_sizes[team][slot][key] = size
+                            self.stored_data_slot_sizes[team][slot] += size + len(key)
 
         # count items and slots from lists for items_handling = remote
         self.logger.info(
@@ -2529,8 +2537,8 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
             key = args["key"]
             if len(key) > ctx.limits["max_key_len"].value:
                 raise LimitExceeded(ctx.limits["max_key_len"])
-            key_is_new = key not in ctx.stored_data_slot_key_sizes[client.slot]
-            if key_is_new and len(ctx.stored_data_slot_key_sizes[client.slot]) >= ctx.limits["slot_key_limit"].value:
+            key_is_new = key not in ctx.stored_data_slot_key_sizes[client.team][client.slot]
+            if key_is_new and len(ctx.stored_data_slot_key_sizes[client.team][client.slot]) >= ctx.limits["slot_key_limit"].value:
                 raise LimitExceeded(ctx.limits["slot_key_limit"])
 
             args["cmd"] = "SetReply"
@@ -2542,8 +2550,8 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
                 value = compute_value(ctx, operation["operation"], value, operation["value"])
             # Operation passed, make sure slot has enough storage left
             new_size = get_stored_value_size(value)
-            old_size = ctx.stored_data_slot_key_sizes[client.slot].get(key, 0)
-            projected = ctx.stored_data_slot_sizes[client.slot] - old_size + new_size + (len(key) if key_is_new else 0)
+            old_size = ctx.stored_data_slot_key_sizes[client.team][client.slot].get(key, 0)
+            projected = ctx.stored_data_slot_sizes[client.team][client.slot] - old_size + new_size + (len(key) if key_is_new else 0)
 
             # Always allow a shrinking operation
             if new_size > old_size and projected > ctx.limits["slot_total_limit"].value:
@@ -2551,8 +2559,8 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
             
             # Passed, update storage vals
             ctx.stored_data[args["key"]] = args["value"] = value
-            ctx.stored_data_slot_key_sizes[client.slot][key] = new_size
-            ctx.stored_data_slot_sizes[client.slot] = projected
+            ctx.stored_data_slot_key_sizes[client.team][client.slot][key] = new_size
+            ctx.stored_data_slot_sizes[client.team][client.slot] = projected
             targets = set(ctx.stored_data_notification_clients[args["key"]])
             if args.get("want_reply", False):
                 targets.add(client)
@@ -2919,7 +2927,7 @@ class ServerCommandProcessor(CommonCommandProcessor):
         total: int = 0
         texts = []
         for key, value in self.ctx.stored_data.items():
-            size = len(pickle.dumps(value))
+            size = len(pickle.dumps(value)) + len(key)
             total += size
             texts.append(f"Key: {key} | Size: {size}B")
         texts.insert(0, f"Found {len(self.ctx.stored_data)} keys, "
@@ -2927,10 +2935,17 @@ class ServerCommandProcessor(CommonCommandProcessor):
 
         if self.ctx.stored_data_slot_sizes:
             slot_limit = self.ctx.limits["slot_total_limit"].value
-            slot_lines = [
-                f"  Slot {slot}: {Utils.format_SI_prefix(size, power=1024)}B / {Utils.format_SI_prefix(slot_limit, power=1024)}B"
-                for slot, size in sorted(self.ctx.stored_data_slot_sizes.items())
-            ]
+            key_limit = self.ctx.limits["slot_key_limit"].value
+            slot_lines = []
+            for team, slots in sorted(self.ctx.stored_data_slot_sizes.items()):
+                for slot, size in sorted(slots.items()):
+                    name = self.ctx.player_names.get((team, slot), '?')
+                    slot_lines.append(
+                        f"  Team {team} Slot {slot} ({name}): "
+                        f"{Utils.format_SI_prefix(size, power=1024)}B / {Utils.format_SI_prefix(slot_limit, power=1024)}B, "
+                        f"{len(self.ctx.stored_data_slot_key_sizes[team][slot])} / {key_limit} keys"
+                    )
+
             texts.insert(1, "Per-slot usage:\n" + "\n".join(slot_lines))
 
         self.output("\n".join(texts))
