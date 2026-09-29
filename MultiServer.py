@@ -1769,8 +1769,9 @@ class ClientMessageProcessor(CommonCommandProcessor):
         If you need further help once logged in.  use "!admin /help" """
 
         output = f"!admin {command}"
-        if output.lower().startswith(
-                "!admin login"):  # disallow others from seeing the supplied password, whether it is correct.
+        if output.lower().startswith("!admin login") or output.lower().startswith("!admin /login"):
+            # disallow others from seeing the supplied password, whether it is correct.
+            # also cover a possible dumb /login case from user error
             output = f"!admin login {('*' * random.randint(4, 16))}"
         elif output.lower().startswith(
                 # disallow others from knowing what the new remote administration password is.
@@ -2921,16 +2922,14 @@ class ServerCommandProcessor(CommonCommandProcessor):
             self.ctx.broadcast_all([{"cmd": "RoomUpdate", option_name: getattr(self.ctx, option_name)}])
         return True
 
-    def _cmd_datastore(self):
-        """Debug Tool: list writable datastorage keys and approximate the size of their values with pickle."""
+    def _cmd_datastore(self, sort: str = "slot"):
+        """Debug Tool: show per-slot datastorage usage. Usage: /datastore [sort: slot|size]"""
         total: int = 0
-        texts = []
         for key, value in self.ctx.stored_data.items():
-            size = len(pickle.dumps(value)) + len(key)
-            total += size
-            texts.append(f"Key: {key} | Size: {size}B")
-        texts.insert(0, f"Found {len(self.ctx.stored_data)} keys, "
-                        f"approximately totaling {Utils.format_SI_prefix(total, power=1024)}B")
+            total += len(pickle.dumps(value)) + len(key)
+
+        self.output(f"Found {len(self.ctx.stored_data)} keys, "
+                    f"approximately totaling {Utils.format_SI_prefix(total, power=1024)}B")
 
         if self.ctx.stored_data_slot_sizes:
             slot_limit = self.ctx.limits["slot_total_limit"].value
@@ -2939,15 +2938,34 @@ class ServerCommandProcessor(CommonCommandProcessor):
             for team, slots in sorted(self.ctx.stored_data_slot_sizes.items()):
                 for slot, size in sorted(slots.items()):
                     name = self.ctx.player_names.get((team, slot), '?')
-                    slot_lines.append(
+                    slot_lines.append((
+                        team, slot, size,
                         f"  Team {team} Slot {slot} ({name}): "
                         f"{Utils.format_SI_prefix(size, power=1024)}B / {Utils.format_SI_prefix(slot_limit, power=1024)}B, "
                         f"{len(self.ctx.stored_data_slot_key_sizes[team][slot])} / {key_limit} keys"
-                    )
+                    ))
 
-            texts.insert(1, "Per-slot usage:\n" + "\n".join(slot_lines))
+            if sort == "size":
+                slot_lines.sort(key=lambda x: x[2], reverse=True)
+            else:  # default: slot
+                slot_lines.sort(key=lambda x: (x[0], x[1]))
 
-        self.output("\n".join(texts))
+            lines = [text for _, _, _, text in slot_lines]
+            for i in range(0, len(lines), 100):
+                self.output("\n".join(lines[i:i + 100]))
+
+    def _cmd_datastore_keys(self):
+        """Debug Tool: list all datastorage keys and their sizes, sorted by size descending"""
+        entries = []
+        for key, value in self.ctx.stored_data.items():
+            size = len(pickle.dumps(value)) + len(key)
+            entries.append((size, f"Key: {key} | Size: {size}B"))
+
+        entries.sort(reverse=True)
+
+        self.output(f"Found {len(entries)} keys:")
+        for i in range(0, len(entries), 100):
+            self.output("\n".join(text for _, text in entries[i:i + 100]))
 
 
     def _cmd_limits(self):
