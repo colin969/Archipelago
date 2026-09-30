@@ -102,14 +102,18 @@ class WebHostContext(Context):
                 pass
 
     def _process_db_commands(self, cmdprocessor):
-        with db_session:
-            commands = select(command for command in Command if command.room.id == self.room_id)
-            if commands:
-                for command in commands:
-                    self.logger.info(f"Room {self.room_id} running command: {command.commandtext!r}")
-                    self.main_loop.call_soon_threadsafe(cmdprocessor, command.commandtext)
-                    command.delete()
-                commit()
+        try:
+            with db_session:
+                commands = select(command for command in Command if command.room.id == self.room_id)
+                if commands:
+                    for command in commands:
+                        self.logger.info(f"Room {self.room_id} running command: {command.commandtext!r}")
+                        self.main_loop.call_soon_threadsafe(cmdprocessor, command.commandtext)
+                        command.delete()
+                    commit()
+        except Exception as e:
+            self.logger.exception(f"Room {self.room_id} failed to process DB commands: {e}")
+
 
     @db_session
     def load(self, room_id: int):
