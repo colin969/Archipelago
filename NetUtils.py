@@ -95,16 +95,16 @@ class NetworkItem(typing.NamedTuple):
     """ Sending player, except in LocationInfo (from LocationScouts), where it is the receiving player. """
     flags: int = 0
 
-
-def _typed_tuple(obj):
+def _scan_for_TypedTuples(obj: typing.Any) -> typing.Any:
     if isinstance(obj, tuple) and hasattr(obj, "_fields"):  # NamedTuple is not actually a parent class
         data = obj._asdict()
         data["class"] = obj.__class__.__name__
         return data
     if isinstance(obj, (tuple, list, set, frozenset)):
-        return tuple(obj)
-    raise TypeError(f"{obj} is not serializable")
-
+        return tuple(_scan_for_TypedTuples(o) for o in obj)
+    if isinstance(obj, dict):
+        return {key: _scan_for_TypedTuples(value) for key, value in obj.items()}
+    return obj
 
 _base_types = str | int | bool | float | None | tuple["_base_types", ...] | dict["_base_types", "base_types"]
 
@@ -135,7 +135,7 @@ _encode = JSONEncoder(
 
 
 def encode(obj: typing.Any) -> str:
-    return orjson.dumps(obj, default=_typed_tuple, option=orjson.OPT_NON_STR_KEYS).decode('utf-8')
+    return _encode(_scan_for_TypedTuples(obj))
 
 
 def get_any_version(data: dict) -> Version:
