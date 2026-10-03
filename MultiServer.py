@@ -107,6 +107,60 @@ def queue_gc():
         setattr(queue_gc, "_thread", gc_thread)
         gc_thread.start()
 
+MAX_INT_BITS = 256
+MAX_STRING_LEN = 1 * 1024 * 1024
+MAX_LIST_LEN = 1 * 1024 * 1024
+
+def safe_pow(base, exp):
+    match (base, exp):
+        case (int(), int()) if abs(base) > 1 and exp > 1:
+            num_bits = math.ceil(math.log2(abs(base)) * exp)
+            if num_bits > MAX_INT_BITS:
+                raise ValueError("Result would exceed int bit limit")
+
+    return base ** exp
+
+def safe_lshift(lhs, rhs):
+    if lhs != 0:
+        num_bits = lhs.bit_length() + rhs
+        if num_bits > MAX_INT_BITS:
+            raise ValueError("Result would exceed int bit limit")
+
+    return lhs << rhs
+
+def safe_add(lhs: typing.Any, rhs: typing.Any):
+    match (lhs, rhs):
+        case (str(), str()):
+            if len(lhs) + len(rhs) > MAX_STRING_LEN:
+                raise ValueError("Result would exceed string size limit")
+        case (list(), list()):
+            if len(lhs) + len(rhs) > MAX_LIST_LEN:
+                raise ValueError("Result would exceed list size limit")
+        case (int(), int()):
+            if (lhs + rhs).bit_length() > MAX_INT_BITS:
+                raise ValueError("Result would exceed int bit limit")
+    return lhs + rhs
+
+
+def safe_mul(lhs: typing.Any, rhs: typing.Any):
+    match (lhs, rhs):
+        case (int(), int()) if lhs != 0 and rhs != 0:
+            num_bits = math.ceil(math.log2(abs(lhs)) + math.log2(abs(rhs)))
+            if num_bits > MAX_INT_BITS:
+                raise ValueError("Result would exceed int bit limit")
+        case (str(), int()) if rhs > 0:
+            if len(lhs) * rhs > MAX_STRING_LEN:
+                raise ValueError("Result would exceed string size limit")
+        case (int(), str()) if lhs > 0:
+            if lhs * len(rhs) > MAX_STRING_LEN:
+                raise ValueError("Result would exceed string size limit")
+        case (list(), int()) if rhs > 0:
+            if len(lhs) * rhs > MAX_LIST_LEN:
+                raise ValueError("Result would exceed list size limit")
+        case (int(), list()) if lhs > 0:
+            if lhs * len(rhs) > MAX_LIST_LEN:
+                raise ValueError("Result would exceed list size limit")
+    return lhs * rhs
 
 # functions callable on storable data on the server by clients
 modify_functions = {
@@ -114,9 +168,9 @@ modify_functions = {
     "replace": lambda old, new: new,
     "default": lambda old, new: old,
     # numeric:
-    "add": operator.add,  # add together two objects, using python's "+" operator (works on strings and lists as append)
-    "mul": operator.mul,
-    "pow": operator.pow,
+    "add": safe_add,  # add together two objects, using python's "+" operator (works on strings and lists as append)
+    "mul": safe_mul,
+    "pow": safe_pow,
     "mod": operator.mod,
     "floor": lambda value, _: math.floor(value),
     "ceil": lambda value, _: math.ceil(value),
@@ -126,7 +180,7 @@ modify_functions = {
     "xor": operator.xor,
     "or": operator.or_,
     "and": operator.and_,
-    "left_shift": operator.lshift,
+    "left_shift": safe_lshift,
     "right_shift": operator.rshift,
     # lists/dicts:
     "remove": remove_from_list,
@@ -1615,16 +1669,8 @@ class ClientMessageProcessor(CommonCommandProcessor):
         Once logged in, you can then use "!admin <command>" to issue commands.
         If you need further help once logged in.  use "!admin /help" """
 
-        output = f"!admin {command}"
-        if output.lower().startswith(
-                "!admin login"):  # disallow others from seeing the supplied password, whether it is correct.
-            output = f"!admin login {('*' * random.randint(4, 16))}"
-        elif output.lower().startswith(
-                # disallow others from knowing what the new remote administration password is.
-                "!admin /option server_password"):
-            output = f"!admin /option server_password {('*' * random.randint(4, 16))}"
-        self.ctx.broadcast_text_all(self.ctx.get_aliased_name(self.client.team, self.client.slot) + ': ' + output,
-                                    {"type": "Chat", "team": self.client.team, "slot": self.client.slot, "message": output})
+        self.ctx.broadcast_text_all(self.ctx.get_aliased_name(self.client.team, self.client.slot) + ': !admin [redacted]',
+            {"type": "Chat", "team": self.client.team, "slot": self.client.slot, "message": "!admin [redacted]"})
 
         if not self.ctx.server_password and not self.ctx.apx_server_password:
             self.output("Sorry, Remote administration is disabled")
@@ -2365,6 +2411,8 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
             value = ctx.stored_data.get(args["key"], args.get("default", 0))
             args["original_value"] = copy.copy(value)
             args["slot"] = client.slot
+            if len(args["operations"]) > 100:
+                raise ValueError("Too many operations in a single set")
             for operation in args["operations"]:
                 func = modify_functions[operation["operation"]]
                 value = func(value, operation["value"])
