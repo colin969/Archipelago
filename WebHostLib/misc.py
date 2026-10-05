@@ -254,9 +254,10 @@ def room_status(room: UUID):
     )
 
     if not is_alive:
-        # Spin up room, let client poll for status later
-        room.last_activity = now
-        commit()
+        if now - room.last_activity > datetime.timedelta(minutes=1):
+            # Spin up room, let client poll for status later
+            room.last_activity = now
+            commit()
         return Response(
             json.dumps({"alive": False, "port": None}),
             mimetype="application/json",
